@@ -51,7 +51,7 @@ jobs:
           }
           & $iscc.FullName /Q "/DSourceExe=$PWD\dist\shadersweep.exe" installer\shadersweep.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
-          Copy-Item target\installer\shadersweep-setup-*.exe dist\
+          Copy-Item target\installer\shadersweep-setup.exe dist\
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -59,5 +59,5 @@ jobs:
           files: |
             dist/shadersweep.exe
             dist/shadersweep.exe.sha256
-            dist/shadersweep-setup-*.exe
+            dist/shadersweep-setup.exe
           generate_release_notes: true
