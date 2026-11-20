@@ -10,7 +10,7 @@ use gpui::{
 
 use super::components::*;
 use super::{
-    CacheGroup, MainView, NoticeAction, NoticeKind, SMALL_CACHE_BYTES, ScanState, SortKey, UpdateState, View, percent, store_app_name,
+    CacheGroup, MainView, NoticeAction, NoticeKind, ScanState, SortKey, UpdateState, View, percent, store_app_name,
 };
 use crate::assets::Icon;
 use crate::cache::AppCache;
@@ -66,12 +66,6 @@ impl MainView {
                     .child(view_tab("view-overview", Icon::Dashboard, "Overview", None, View::Overview))
                     .child(view_tab("view-all", Icon::List, "All apps", Some(self.visible_apps().len()), View::All)),
             )
-            .when(list_view, |bar| {
-                bar.child(div().w(px(1.0)).h(px(20.0)).bg(rgb(p.border))).child(
-                    toggle("hide-small", "Hide under 1 MB", self.hide_small)
-                        .on_click(cx.listener(|this, _, _, cx| this.set_hide_small(!this.hide_small, cx))),
-                )
-            })
             .child(div().flex_1())
             .when(self.refreshing, |bar| bar.child(div().text_xs().text_color(rgb(p.muted)).child("Refreshing…")))
             .when(list_view && self.ready_scan().is_some(), |bar| {
@@ -163,7 +157,6 @@ impl MainView {
                 button(("select-group", ix), "Select", ButtonStyle::Secondary).on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.marked.extend(keys.iter().cloned());
-                        this.hide_small = false;
                         this.view = View::All;
                         cx.notify();
                     },
@@ -236,8 +229,6 @@ impl MainView {
                     )
                     .child(div().w(px(84.0)).text_right().font_weight(FontWeight::SEMIBOLD).child(format::bytes(app.total_size)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let small = this.app(&key).is_some_and(|a| a.total_size < SMALL_CACHE_BYTES);
-                        this.hide_small &= !small;
                         this.view = View::All;
                         this.focus_app(&key, cx);
                     }))
@@ -281,7 +272,7 @@ impl MainView {
             ScanState::Failed(err) => Some(err.clone()),
             ScanState::Ready(scan) if scan.apps.is_empty() => Some("The shader cache is empty.".into()),
             ScanState::Ready(_) if visible_count == 0 => {
-                Some("Nothing over 1 MB is cached. Turn off \"Hide under 1 MB\" to see everything.".into())
+                Some("Nothing over 1 MB is cached. Turn off \"Hide caches under 1 MB\" in Settings to see everything.".into())
             }
             ScanState::Ready(_) => None,
         };
@@ -882,7 +873,7 @@ impl MainView {
                     ),
             )
             .child(switch(self.settings.hide_small))
-            .on_click(cx.listener(|this, _, _, cx| this.set_hide_small(!this.settings.hide_small, cx)));
+            .on_click(cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.hide_small = !s.hide_small)));
 
         let shortcuts = [
             ("↑ ↓", "Move between apps"),
@@ -920,9 +911,8 @@ impl MainView {
                     .child(self.render_cache_folder(cx))
                     .child(hide_small_row),
             )
-            .child(settings_card("Updates", None).child(self.render_update_section(cx)))
             .child(settings_card("Keyboard", None).child(keyboard))
-            .child(about_card());
+            .child(about_card(self.render_update_section(cx)));
 
         // A vertical flex container lets the column keep its full height and overflow, which
         // is what makes the page scroll; in a row it would be stretched to fit instead.
@@ -987,17 +977,16 @@ impl MainView {
 
         let status: AnyElement = match &self.update {
             UpdateState::Idle | UpdateState::UpToDate => {
-                let detail = match (&self.update, &checked) {
-                    (UpdateState::UpToDate, _) => "You're on the latest version.".to_owned(),
-                    (_, Some(when)) => format!("Last checked {when}."),
-                    (_, None) => "Not checked yet.".to_owned(),
-                };
-                status_row(Icon::Check, p.accent, format!("Shadersweep {current}"), detail)
+                let title = if matches!(self.update, UpdateState::UpToDate) { "You're up to date" } else { "Updates" };
+                let detail = checked.map_or_else(|| "Not checked yet.".to_owned(), |when| format!("Last checked {when}."));
+                status_row(Icon::Check, p.accent, title.into(), detail)
                     .child(check_button("Check now"))
                     .into_any_element()
             }
-            UpdateState::Checking => status_row(Icon::Refresh, p.muted, format!("Shadersweep {current}"), "Checking for updates…".into())
-                .into_any_element(),
+            UpdateState::Checking => {
+                status_row(Icon::Refresh, p.muted, "Checking for updates…".into(), "Asking GitHub for the latest release.".into())
+                    .into_any_element()
+            }
             UpdateState::Failed(err) => div()
                 .flex()
                 .flex_col()
@@ -1357,7 +1346,8 @@ fn settings_card(title: &'static str, description: Option<&'static str>) -> Div 
         )
 }
 
-fn about_card() -> Div {
+/// The last card of the Settings tab: app identity, update status and links.
+fn about_card(updates: Div) -> Div {
     let p = p();
     let repo = format!("https://github.com/{}", updater::REPOSITORY);
     let link = |id: &'static str, label: &'static str, url: String| {
@@ -1379,6 +1369,7 @@ fn about_card() -> Div {
         .flex()
         .flex_col()
         .rounded_lg()
+        .bg(rgb(p.panel))
         .border_1()
         .border_color(rgb(p.border))
         .overflow_hidden()
@@ -1387,7 +1378,7 @@ fn about_card() -> Div {
                 .flex()
                 .items_center()
                 .gap_3()
-                .p_4()
+                .p_5()
                 .bg(rgb(p.raised))
                 .child(app_logo(44.0))
                 .child(
@@ -1416,12 +1407,13 @@ fn about_card() -> Div {
                         .child(format!("v{}", updater::current_version())),
                 ),
         )
+        .child(div().p_5().border_b_1().border_color(rgb(p.border)).child(updates))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .p_4()
+                .p_5()
                 .child(
                     div()
                         .flex()

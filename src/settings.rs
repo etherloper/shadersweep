@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::theme::ThemeMode;
 
-/// Missing fields take their defaults and unknown ones (from older versions) are ignored,
-/// so settings files stay readable across releases.
+/// Missing fields take their defaults, so a settings file from an earlier release still loads.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -78,9 +77,8 @@ mod tests {
     }
 
     #[test]
-    fn fills_missing_fields_and_ignores_old_ones() {
-        // `stale_days` was a setting in 0.1.x; files that still have it must keep loading.
-        let settings = Settings::from_json(r#"{"theme":"dark","stale_days":30}"#).unwrap();
+    fn fills_missing_fields_with_defaults() {
+        let settings = Settings::from_json(r#"{"theme":"dark"}"#).unwrap();
         assert_eq!(settings.theme, ThemeMode::Dark);
         assert!(settings.hide_small);
         assert!(Settings::from_json(r#"{"theme":"neon"}"#).is_err());

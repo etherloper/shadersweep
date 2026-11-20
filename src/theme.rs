@@ -29,7 +29,7 @@ pub struct Palette {
     pub switch_knob_on: u32,
     pub toast_bg: u32,
     pub toast_text: u32,
-    /// RGBA, drawn behind dialogs and the settings sheet.
+    /// RGBA, drawn behind dialogs.
     pub backdrop: u32,
     /// Categorical colours for letter tiles.
     pub series: [u32; 6],

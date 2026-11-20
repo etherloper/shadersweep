@@ -174,21 +174,6 @@ pub fn switch(on: bool) -> Div {
         )
 }
 
-pub fn toggle(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> {
-    let p = p();
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_2()
-        .cursor_pointer()
-        .text_sm()
-        .text_color(rgb(p.muted))
-        .hover(|t| t.text_color(rgb(p.text)))
-        .child(switch(on))
-        .child(label)
-}
-
 /// A top-bar tab: icon, label and optional count, underlined when active. Fills the bar's
 /// height so the underline sits on the bar's bottom edge.
 pub fn tab(id: impl Into<ElementId>, glyph: Icon, label: &'static str, count: Option<usize>, active: bool) -> Stateful<Div> {

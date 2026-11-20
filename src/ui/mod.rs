@@ -123,7 +123,6 @@ pub struct MainView {
     title_bar_dark: Option<bool>,
     focused: Option<String>,
     marked: BTreeSet<String>,
-    hide_small: bool,
     view: View,
     sort: SortKey,
     sort_descending: bool,
@@ -154,7 +153,6 @@ impl MainView {
             steam_catalog: SteamCatalog::new(),
             running: RunningProcesses::new(),
             icons: HashMap::new(),
-            hide_small: settings.hide_small,
             settings,
             previous_view: View::All,
             title_bar_dark: None,
@@ -502,12 +500,6 @@ impl MainView {
         self.update_settings(cx, |s| s.theme = mode);
     }
 
-    fn set_hide_small(&mut self, hide: bool, cx: &mut Context<Self>) {
-        self.hide_small = hide;
-        self.update_settings(cx, |s| s.hide_small = hide);
-        cx.notify();
-    }
-
     /// Applies the chosen theme before anything is drawn, including the native title bar.
     fn apply_theme(&mut self, window: &Window) {
         let dark = self.settings.theme.is_dark(window.appearance());
@@ -535,7 +527,7 @@ impl MainView {
         let mut apps: Vec<&AppCache> = self
             .all_apps()
             .iter()
-            .filter(|app| !self.hide_small || app.total_size >= SMALL_CACHE_BYTES)
+            .filter(|app| !self.settings.hide_small || app.total_size >= SMALL_CACHE_BYTES)
             .collect();
         apps.sort_by(|a, b| {
             let order = match self.sort {
