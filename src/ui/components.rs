@@ -166,9 +166,15 @@ pub fn switch(on: bool) -> Div {
         .flex()
         .flex_none()
         .rounded_full()
-        .when(on, |track| track.bg(rgb(p.accent)).justify_end())
+        .when(on, |track| track.bg(rgb(p.switch_on)).justify_end())
         .when(!on, |track| track.bg(rgb(p.border_strong)))
-        .child(div().size(px(14.0)).rounded_full().bg(rgb(0xffffff)).shadow_sm())
+        .child(
+            div()
+                .size(px(14.0))
+                .rounded_full()
+                .bg(rgb(if on { p.switch_knob_on } else { 0xffffff }))
+                .shadow_sm(),
+        )
 }
 
 pub fn toggle(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> {

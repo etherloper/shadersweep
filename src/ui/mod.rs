@@ -15,6 +15,7 @@ use gpui::{
 use crate::cache::{self, AppCache, CacheFile, DeleteReport, ScanResult};
 use crate::format::{self, plural};
 use crate::library::{self, GameLibrary};
+use crate::locate::{self, SeenExes};
 use crate::native;
 use crate::processes::{self, RunningProcesses};
 use crate::settings::{self, Settings};
@@ -83,7 +84,8 @@ impl SortKey {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Filter {
+enum View {
+    Overview,
     All,
     Stale,
 }
@@ -94,6 +96,8 @@ pub struct MainView {
     /// A rescan is running while the previous result stays on screen.
     refreshing: bool,
     games: GameLibrary,
+    /// Executables Windows has recorded this user launching, for apps outside the libraries.
+    seen_exes: SeenExes,
     running: RunningProcesses,
     /// `None` means loading was attempted and failed; the letter tile is shown instead.
     icons: HashMap<String, Option<Arc<RenderImage>>>,
@@ -104,7 +108,7 @@ pub struct MainView {
     focused: Option<String>,
     marked: BTreeSet<String>,
     hide_small: bool,
-    filter: Filter,
+    view: View,
     sort: SortKey,
     sort_descending: bool,
     confirm: Option<Vec<String>>,
@@ -130,6 +134,7 @@ impl MainView {
             scan: ScanState::Scanning,
             refreshing: false,
             games: GameLibrary::new(),
+            seen_exes: SeenExes::new(),
             running: RunningProcesses::new(),
             icons: HashMap::new(),
             hide_small: settings.hide_small,
@@ -138,7 +143,7 @@ impl MainView {
             title_bar_dark: None,
             focused: None,
             marked: BTreeSet::new(),
-            filter: Filter::All,
+            view: View::All,
             sort: SortKey::Size,
             sort_descending: true,
             confirm: None,
@@ -308,11 +313,14 @@ impl MainView {
     }
 
     fn load_games(&mut self, cx: &mut Context<Self>) {
-        let task = cx.background_executor().spawn(async { library::discover_games() });
+        let task = cx
+            .background_executor()
+            .spawn(async { (library::discover_games(), locate::discover()) });
         cx.spawn(async move |this, cx| {
-            let games = task.await;
+            let (games, seen_exes) = task.await;
             this.update(cx, |this, cx| {
                 this.games = games;
+                this.seen_exes = seen_exes;
                 this.load_missing_icons(cx);
                 cx.notify();
             })
@@ -499,7 +507,7 @@ impl MainView {
             .all_apps()
             .iter()
             .filter(|app| !self.hide_small || app.total_size >= SMALL_CACHE_BYTES)
-            .filter(|app| self.filter == Filter::All || self.is_stale(app, now))
+            .filter(|app| self.view != View::Stale || self.is_stale(app, now))
             .collect();
         apps.sort_by(|a, b| {
             let order = match self.sort {
@@ -526,11 +534,20 @@ impl MainView {
         self.all_apps().iter().find(|app| app.key == key)
     }
 
+    /// An executable that exists on disk, for loading icons.
     fn exe_path(&self, key: &str) -> Option<PathBuf> {
+        self.exe_location(key).filter(|(_, exists)| *exists).map(|(path, _)| path)
+    }
+
+    /// Where an app's executable is (or was last seen), and whether it is still there.
+    fn exe_location(&self, key: &str) -> Option<(PathBuf, bool)> {
         if let Some(game) = self.games.get(key) {
-            return Some(game.exe_path.clone());
+            return Some((game.exe_path.clone(), true));
         }
-        self.running.get(key).cloned().flatten()
+        if let Some(Some(path)) = self.running.get(key) {
+            return Some((path.clone(), true));
+        }
+        self.seen_exes.get(key).map(|seen| (seen.path.clone(), seen.exists))
     }
 
     fn prune_selection(&mut self) {
@@ -538,9 +555,6 @@ impl MainView {
         self.marked.retain(|key| existing.contains(key));
         if self.focused.as_ref().is_some_and(|key| !existing.contains(key)) {
             self.focused = None;
-        }
-        if self.focused.is_none() {
-            self.focused = self.visible_apps().first().map(|app| app.key.clone());
         }
     }
 
@@ -550,6 +564,9 @@ impl MainView {
         }
         if let Some(game) = self.games.get(&app.key) {
             return game.title.clone();
+        }
+        if let Some(name) = self.seen_exes.get(&app.key).and_then(|seen| seen.display_name()) {
+            return name;
         }
         store_app_name(&app.key).unwrap_or_else(|| app.key.clone())
     }
@@ -663,6 +680,10 @@ impl MainView {
                 self.marked.clear();
                 cx.notify();
             }
+            "escape" if self.focused.is_some() => {
+                self.focused = None;
+                cx.notify();
+            }
             "f5" => self.rescan(cx),
             _ => {}
         }
@@ -684,23 +705,18 @@ impl Render for MainView {
             .text_color(rgb(p.text))
             .font_family("Segoe UI")
             .text_sm()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .bg(rgb(p.panel))
-                    .border_b_1()
-                    .border_color(rgb(p.border))
-                    .child(self.render_header(cx))
-                    .children(self.render_overview(cx)),
-            )
+            .child(self.render_toolbar(cx))
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .child(self.render_list(cx))
-                    .child(self.render_detail(cx)),
+                    .map(|body| match self.view {
+                        View::Overview => body.child(self.render_overview(cx)),
+                        View::All | View::Stale => {
+                            body.child(self.render_list(cx)).children(self.render_detail(cx))
+                        }
+                    }),
             )
             .children(self.render_selection_bar(cx))
             .children(self.render_toast(cx))

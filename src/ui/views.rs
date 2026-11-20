@@ -1,5 +1,6 @@
 //! Rendering for `MainView`. State changes live in `mod.rs`; this file only draws.
 
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use gpui::{
@@ -9,7 +10,7 @@ use gpui::{
 
 use super::components::*;
 use super::{
-    Filter, MainView, NoticeAction, NoticeKind, SMALL_CACHE_BYTES, ScanState, SortKey, UpdateState, percent, store_app_name,
+    MainView, NoticeAction, NoticeKind, SMALL_CACHE_BYTES, ScanState, SortKey, UpdateState, View, percent, store_app_name,
 };
 use crate::assets::Icon;
 use crate::cache::AppCache;
@@ -23,6 +24,7 @@ const DETAIL_WIDTH: f32 = 380.0;
 const SETTINGS_WIDTH: f32 = 400.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
 const USAGE_SEGMENTS: usize = 5;
+const LARGEST_LIST_LEN: usize = 10;
 const ENTRANCE: Duration = Duration::from_millis(180);
 
 impl MainView {
@@ -35,26 +37,53 @@ impl MainView {
 
     // ---- header and overview ----------------------------------------------------------
 
-    pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    // ---- top bar ---------------------------------------------------------------------
+
+    pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = p();
+        let stale_count = self.stale_apps().len();
+        let shown = self.visible_apps().len();
+        let list_view = self.view != View::Overview;
+        let tab = |id: &'static str, label: SharedString, view: View| {
+            segment(id, label, self.view == view)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.view = view;
+                    cx.notify();
+                }))
+                .into_any_element()
+        };
         div()
             .flex()
             .items_center()
-            .justify_end()
-            .gap_3()
-            .px_5()
-            .py_3()
-            .when(self.refreshing, |header| {
-                header.child(div().text_xs().text_color(rgb(p.muted)).child("Refreshing…"))
+            .gap_4()
+            .px_4()
+            .py_2p5()
+            .bg(rgb(p.panel))
+            .border_b_1()
+            .border_color(rgb(p.border))
+            .child(segmented([
+                tab("view-overview", "Overview".into(), View::Overview),
+                tab("view-all", "All apps".into(), View::All),
+                tab(
+                    "view-stale",
+                    format!("Not updated in {}+ days ({stale_count})", self.settings.stale_days).into(),
+                    View::Stale,
+                ),
+            ]))
+            .when(list_view, |bar| {
+                bar.child(
+                    toggle("hide-small", "Hide under 1 MB", self.hide_small)
+                        .on_click(cx.listener(|this, _, _, cx| this.set_hide_small(!this.hide_small, cx))),
+                )
             })
-            .child(
-                icon_button("rescan", Some(Icon::Refresh), "Rescan", ButtonStyle::Secondary)
-                    .on_click(cx.listener(|this, _, _, cx| this.rescan(cx))),
-            )
-            .when_some(self.cache_dir.clone(), |header, dir| {
-                header.child(
-                    icon_button("open-folder", Some(Icon::Folder), "Open folder", ButtonStyle::Secondary)
-                        .on_click(move |_, _, cx| cx.open_url(&dir.to_string_lossy())),
+            .child(div().flex_1())
+            .when(self.refreshing, |bar| bar.child(div().text_xs().text_color(rgb(p.muted)).child("Refreshing…")))
+            .when(list_view && self.ready_scan().is_some(), |bar| {
+                bar.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(p.muted))
+                        .child(format!("Showing {} of {}", shown, self.all_apps().len())),
                 )
             })
             .child(
@@ -80,9 +109,18 @@ impl MainView {
             )
     }
 
-    pub(super) fn render_overview(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    // ---- overview tab -----------------------------------------------------------------
+
+    pub(super) fn render_overview(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = p();
-        let scan = self.ready_scan()?;
+        let scan = match &self.scan {
+            ScanState::Ready(scan) => scan,
+            ScanState::Scanning => return empty_state(Icon::Info, "Scanning the shader cache…".into()).into_any_element(),
+            ScanState::Failed(err) => return empty_state(Icon::Alert, err.clone()).into_any_element(),
+        };
+        if scan.apps.is_empty() {
+            return empty_state(Icon::Info, "The shader cache is empty.".into()).into_any_element();
+        }
         let total = scan.total_size.max(1);
         let stale = self.stale_apps();
         let stale_size: u64 = stale.iter().map(|app| app.total_size).sum();
@@ -122,7 +160,7 @@ impl MainView {
                         .on_click(cx.listener(|this, _, _, cx| {
                             let keys: Vec<String> = this.stale_apps().iter().map(|app| app.key.clone()).collect();
                             this.marked.extend(keys);
-                            this.filter = Filter::Stale;
+                            this.view = View::Stale;
                             this.hide_small = false;
                             cx.notify();
                         }))
@@ -140,35 +178,22 @@ impl MainView {
         let top: Vec<&AppCache> = scan.apps.iter().take(USAGE_SEGMENTS).collect();
         let other_size = scan.total_size.saturating_sub(top.iter().map(|app| app.total_size).sum());
         let share = |size: u64| (size as f64 / total as f64) as f32;
-
         let bar = div()
             .flex()
             .gap(px(2.0))
-            .h(px(8.0))
+            .h(px(10.0))
             .w_full()
             .children(top.iter().enumerate().map(|(ix, app)| {
                 div().h_full().rounded_sm().w(relative(share(app.total_size))).bg(rgb(p.series[ix]))
             }))
-            .when(other_size > 0, |bar| {
-                bar.child(div().h_full().rounded_sm().flex_1().bg(rgb(p.series_other)))
-            });
-
+            .when(other_size > 0, |bar| bar.child(div().h_full().rounded_sm().flex_1().bg(rgb(p.series_other))));
         let legend = div()
             .flex()
             .flex_wrap()
             .gap_x_4()
             .gap_y_1()
             .children(top.iter().enumerate().map(|(ix, app)| {
-                let key = app.key.clone();
                 legend_item(("legend", ix), p.series[ix], self.display_name(app), format::bytes(app.total_size))
-                    .cursor_pointer()
-                    .hover(|item| item.text_color(rgb(p.text)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let small = this.app(&key).is_some_and(|a| a.total_size < SMALL_CACHE_BYTES);
-                        this.hide_small &= !small;
-                        this.filter = Filter::All;
-                        this.focus_app(&key, cx);
-                    }))
             }))
             .when(other_size > 0, |legend| {
                 legend.child(legend_item(
@@ -179,73 +204,88 @@ impl MainView {
                 ))
             });
 
-        Some(
+        let largest_list = div()
+            .flex()
+            .flex_col()
+            .children(scan.apps.iter().take(LARGEST_LIST_LEN).enumerate().map(|(ix, app)| {
+                let key = app.key.clone();
+                let fraction = (app.total_size as f64 / scan.apps[0].total_size.max(1) as f64).clamp(0.01, 1.0) as f32;
+                div()
+                    .id(("largest", ix))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|row| row.bg(rgb(p.hover)))
+                    .child(div().w(px(18.0)).text_xs().text_color(rgb(p.muted)).child(format!("{}", ix + 1)))
+                    .child(self.app_icon(app, 24.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().truncate().font_weight(FontWeight::MEDIUM).child(self.display_name(app)))
+                            .child(
+                                div()
+                                    .h(px(4.0))
+                                    .w_full()
+                                    .rounded_full()
+                                    .bg(rgb(p.raised))
+                                    .child(div().h_full().w(relative(fraction)).rounded_full().bg(rgb(p.accent))),
+                            ),
+                    )
+                    .child(div().w(px(84.0)).text_right().font_weight(FontWeight::SEMIBOLD).child(format::bytes(app.total_size)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let small = this.app(&key).is_some_and(|a| a.total_size < SMALL_CACHE_BYTES);
+                        this.hide_small &= !small;
+                        this.view = View::All;
+                        this.focus_app(&key, cx);
+                    }))
+            }));
+
+        let section = |title: &'static str| {
             div()
                 .flex()
                 .flex_col()
                 .gap_3()
-                .px_5()
-                .pb_4()
-                .child(cards)
-                .child(div().flex().flex_col().gap_2().child(bar).child(legend)),
-        )
+                .p_4()
+                .rounded_lg()
+                .bg(rgb(p.panel))
+                .border_1()
+                .border_color(rgb(p.border))
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+        };
+
+        div()
+            .id("overview")
+            .flex_1()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .p_5()
+            .child(cards)
+            .child(section("Where the space goes").child(bar).child(legend))
+            .child(section("Largest caches").child(largest_list))
+            .into_any_element()
     }
 
     // ---- list -------------------------------------------------------------------------
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = p();
-        let stale_count = self.stale_apps().len();
-        let shown = self.visible_apps().len();
-        div()
-            .flex()
-            .items_center()
-            .gap_4()
-            .px_4()
-            .py_2()
-            .border_b_1()
-            .border_color(rgb(p.border))
-            .child(segmented([
-                segment("filter-all", "All apps".into(), self.filter == Filter::All)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.filter = Filter::All;
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-                segment(
-                    "filter-stale",
-                    format!("Not updated in {}+ days ({stale_count})", self.settings.stale_days).into(),
-                    self.filter == Filter::Stale,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.filter = Filter::Stale;
-                    cx.notify();
-                }))
-                .into_any_element(),
-            ]))
-            .child(
-                toggle("hide-small", "Hide under 1 MB", self.hide_small)
-                    .on_click(cx.listener(|this, _, _, cx| this.set_hide_small(!this.hide_small, cx))),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(p.muted))
-                    .child(format!("Showing {} of {}", shown, self.all_apps().len())),
-            )
-    }
-
     pub(super) fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = p();
         let visible_count = self.visible_apps().len();
         let message = match &self.scan {
             ScanState::Scanning => Some("Scanning the shader cache…".to_owned()),
             ScanState::Failed(err) => Some(err.clone()),
             ScanState::Ready(scan) if scan.apps.is_empty() => Some("The shader cache is empty.".into()),
-            ScanState::Ready(_) if visible_count == 0 => Some(match (self.filter, self.hide_small) {
-                (Filter::Stale, _) => format!("Every cache was updated in the last {} days.", self.settings.stale_days),
-                (Filter::All, _) => "Nothing over 1 MB is cached. Turn off \"Hide under 1 MB\" to see everything.".into(),
+            ScanState::Ready(_) if visible_count == 0 => Some(match self.view {
+                View::Stale => format!("Every cache was updated in the last {} days.", self.settings.stale_days),
+                _ => "Nothing over 1 MB is cached. Turn off \"Hide under 1 MB\" to see everything.".into(),
             }),
             ScanState::Ready(_) => None,
         };
@@ -277,15 +317,7 @@ impl MainView {
                 .into_any_element(),
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .bg(rgb(p.bg))
-            .when(self.ready_scan().is_some(), |list| list.child(self.render_toolbar(cx)))
-            .child(body)
-            .into_any_element()
+        div().flex().flex_col().flex_1().min_w_0().child(body).into_any_element()
     }
 
     fn render_column_headers(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -372,10 +404,7 @@ impl MainView {
             .border_b_1()
             .border_color(rgb(p.border))
             .cursor_pointer()
-            .when(focused, |row| {
-                row.bg(rgb(p.selected))
-                    .child(div().absolute().left_0().top_0().bottom_0().w(px(3.0)).bg(rgb(p.accent)))
-            })
+            .when(focused, |row| row.bg(rgb(p.selected)))
             .when(!focused, |row| row.hover(|row| row.bg(rgb(p.hover))))
             .on_click(cx.listener({
                 let key = key.clone();
@@ -456,9 +485,12 @@ impl MainView {
 
     // ---- detail panel -----------------------------------------------------------------
 
-    pub(super) fn render_detail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The info panel for the selected app; absent when nothing is selected.
+    pub(super) fn render_detail(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let p = p();
+        let app = self.focused.as_deref().and_then(|key| self.app(key))?;
         let panel = div()
+            .id("detail")
             .w(px(DETAIL_WIDTH))
             .flex_none()
             .flex()
@@ -466,9 +498,6 @@ impl MainView {
             .bg(rgb(p.panel))
             .border_l_1()
             .border_color(rgb(p.border));
-        let Some(app) = self.focused.as_deref().and_then(|key| self.app(key)) else {
-            return panel.child(empty_state(Icon::Info, "Select an app to see its cache files.".into()));
-        };
 
         let now = SystemTime::now();
         let running = self.is_running(app);
@@ -485,7 +514,8 @@ impl MainView {
             "These files have a format Shadersweep does not recognise, so it cannot tell which program made them. Deleting them is safe; the driver recreates what it needs."
         };
 
-        panel
+        Some(
+            panel
             .child(
                 div()
                     .flex()
@@ -504,12 +534,19 @@ impl MainView {
                                 div()
                                     .flex()
                                     .flex_col()
+                                    .flex_1()
                                     .min_w_0()
                                     .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(name))
                                     .when(show_key, |col| {
                                         col.child(div().text_xs().text_color(rgb(p.muted)).truncate().child(app.key.clone()))
                                     }),
-                            ),
+                            )
+                            .child(square_button("close-detail", Icon::X, 28.0, p.muted).on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.focused = None;
+                                    cx.notify();
+                                },
+                            ))),
                     )
                     .child(
                         div()
@@ -560,11 +597,12 @@ impl MainView {
                             )
                             .when_some(first_file, |row, path| {
                                 row.child(
-                                    icon_button("reveal-files", Some(Icon::Folder), "Show in Explorer", ButtonStyle::Secondary)
+                                    icon_button("reveal-files", Some(Icon::Folder), "Cache files", ButtonStyle::Secondary)
                                         .on_click(move |_, _, cx| cx.reveal_path(&path)),
                                 )
                             }),
-                    ),
+                    )
+                    .when(app.is_identified(), |col| col.child(self.render_location(app))),
             )
             .child(
                 div()
@@ -614,7 +652,49 @@ impl MainView {
                                     .child(div().h_full().w(relative(fraction)).bg(rgb(p.border_strong))),
                             )
                     })),
-            )
+            ),
+        )
+    }
+
+    /// Where the app's executable is, so an unfamiliar name like `pioneergame.exe` can be
+    /// traced to the game it belongs to.
+    fn render_location(&self, app: &AppCache) -> Div {
+        let p = p();
+        let location = self.exe_location(&app.key);
+        let (path_text, note, button): (Option<String>, Option<&str>, Option<Stateful<Div>>) = match location {
+            Some((path, true)) => (
+                Some(path.display().to_string()),
+                None,
+                Some(
+                    icon_button("reveal-exe", Some(Icon::Folder), "Show game folder", ButtonStyle::Secondary)
+                        .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                ),
+            ),
+            Some((path, false)) => {
+                let folder = path.ancestors().skip(1).find(|dir| dir.is_dir()).map(Path::to_path_buf);
+                (
+                    Some(path.display().to_string()),
+                    Some("No longer on disk. The game may have been uninstalled or its drive disconnected."),
+                    folder.map(|dir| {
+                        icon_button("reveal-exe", Some(Icon::Folder), "Open nearest folder", ButtonStyle::Secondary)
+                            .on_click(move |_, _, cx| cx.reveal_path(&dir))
+                    }),
+                )
+            }
+            None => (
+                None,
+                Some("Unknown. Shadersweep finds games through your Steam and Epic libraries, or once they have been run on this PC."),
+                None,
+            ),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(p.muted)).child("Game location"))
+            .children(path_text.map(|text| div().text_xs().text_color(rgb(p.text)).font_family("Consolas").child(text)))
+            .children(note.map(|text| div().text_xs().text_color(rgb(p.muted)).child(text)))
+            .children(button.map(|b| div().flex().pt_1().child(b)))
     }
 
     // ---- overlays ---------------------------------------------------------------------
@@ -771,7 +851,7 @@ impl MainView {
                 .p(px(6.0))
                 .rounded_lg()
                 .border_2()
-                .border_color(rgb(if active { p.accent } else { p.border }))
+                .border_color(rgb(if active { p.switch_on } else { p.border }))
                 .cursor_pointer()
                 .when(!active, |card| card.hover(|card| card.border_color(rgb(p.border_strong))))
                 .child(theme_preview(mode))
@@ -828,7 +908,7 @@ impl MainView {
             ("↑ ↓", "Move between apps"),
             ("Space", "Check or uncheck"),
             ("Delete", "Delete checked or current"),
-            ("Esc", "Clear selection or close"),
+            ("Esc", "Deselect, clear or close"),
             ("F5", "Rescan"),
             ("Ctrl ,", "Open settings"),
         ];
@@ -884,6 +964,7 @@ impl MainView {
                             .flex_col()
                             .gap_3()
                             .child(section_label("Cache"))
+                            .child(self.render_cache_folder(cx))
                             .child(div().font_weight(FontWeight::MEDIUM).child("Count a cache as not updated after"))
                             .child(div().flex().child(stale_choices))
                             .child(hide_small_row),
@@ -905,37 +986,7 @@ impl MainView {
                                     .child(kbd(keys))
                             })),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(section_label("About"))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(format!("Shadersweep {}", env!("CARGO_PKG_VERSION"))),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(p.muted))
-                                    .child("Shows NVIDIA's DirectX shader cache by game and clears it one game at a time."),
-                            )
-                            .children(self.cache_dir.as_ref().map(|dir| {
-                                div()
-                                    .pt_2()
-                                    .text_xs()
-                                    .text_color(rgb(p.muted))
-                                    .child(format!("Shader cache: {}", dir.display()))
-                            }))
-                            .children(settings_path().map(|path| {
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(p.muted))
-                                    .child(format!("Settings are saved to {}", path.display()))
-                            })),
-                    ),
+                    .child(div().flex().flex_col().gap_3().child(section_label("About")).child(about_card())),
             )
             .with_animation(
                 "settings-in",
@@ -961,6 +1012,41 @@ impl MainView {
                 )
                 .child(sheet),
         )
+    }
+
+    fn render_cache_folder(&self, cx: &mut Context<Self>) -> Div {
+        let p = p();
+        let path = self.cache_dir.as_ref().map(|dir| dir.display().to_string()).unwrap_or_else(|| "Not found".into());
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .bg(rgb(p.raised))
+            .child(div().font_weight(FontWeight::MEDIUM).child("Shader cache folder"))
+            .child(div().text_xs().text_color(rgb(p.muted)).font_family("Consolas").child(path))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .pt_1()
+                    .when_some(self.cache_dir.clone(), |row, dir| {
+                        row.child(
+                            icon_button("open-folder", Some(Icon::Folder), "Open folder", ButtonStyle::Secondary)
+                                .on_click(move |_, _, cx| cx.open_url(&dir.to_string_lossy())),
+                        )
+                    })
+                    .child(
+                        icon_button(
+                            "rescan",
+                            Some(Icon::Refresh),
+                            if self.refreshing { "Rescanning…" } else { "Rescan" },
+                            ButtonStyle::Secondary,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.rescan(cx))),
+                    ),
+            )
     }
 
     fn render_update_section(&self, cx: &mut Context<Self>) -> Div {
@@ -1302,6 +1388,113 @@ fn status_row(glyph: Icon, tint: u32, title: String, detail: String) -> Div {
                 .min_w_0()
                 .child(div().font_weight(FontWeight::MEDIUM).child(title))
                 .child(div().text_xs().text_color(rgb(p.muted)).child(detail)),
+        )
+}
+
+/// The app's logo: a green tile with three shrinking bars (matches the exe icon).
+fn app_logo(size: f32) -> Div {
+    let p = p();
+    let unit = size / 32.0;
+    let bar = |width: f32| div().h(px(3.0 * unit)).w(px(width * unit)).rounded_full().bg(rgb(p.on_accent));
+    div()
+        .size(px(size))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .pl(px(7.0 * unit))
+        .gap(px(3.0 * unit))
+        .rounded(px(8.0 * unit))
+        .bg(rgb(p.accent))
+        .child(bar(18.0))
+        .child(bar(13.0))
+        .child(bar(8.0))
+}
+
+fn about_card() -> Div {
+    let p = p();
+    let repo = format!("https://github.com/{}", updater::REPOSITORY);
+    let link = |id: &'static str, label: &'static str, url: String| {
+        div()
+            .id(id)
+            .px_2p5()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(p.border_strong))
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .hover(|chip| chip.bg(rgb(p.hover)))
+            .child(label)
+            .on_click(move |_, _, cx| cx.open_url(&url))
+    };
+    div()
+        .flex()
+        .flex_col()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(p.border))
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .p_4()
+                .bg(rgb(p.raised))
+                .child(app_logo(44.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("Shadersweep"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(p.muted))
+                                .child("Clear NVIDIA's shader cache one game at a time."),
+                        ),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_0p5()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(rgb(p.border_strong))
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(format!("v{}", updater::current_version())),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_4()
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(link("about-github", "GitHub", repo.clone()))
+                        .child(link("about-releases", "Release notes", updater::releases_page()))
+                        .child(link("about-issues", "Report a problem", format!("{repo}/issues"))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(rgb(p.muted))
+                        .child("MIT License · © 2026 etherloper")
+                        .children(settings_path().map(|path| format!("Settings: {}", path.display()))),
+                ),
         )
 }
 

@@ -6,6 +6,7 @@ mod cache;
 mod format;
 mod http;
 mod library;
+mod locate;
 mod native;
 mod processes;
 mod settings;
