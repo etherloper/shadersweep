@@ -1455,7 +1455,7 @@ fn about_card() -> Div {
                             div()
                                 .text_xs()
                                 .text_color(rgb(p.muted))
-                                .child("Clear NVIDIA's shader cache one game at a time."),
+                                .child("Manage shader caches for individual games."),
                         ),
                 )
                 .child(
@@ -1532,7 +1532,7 @@ fn theme_preview(mode: ThemeMode) -> Div {
                     .bg(rgb(palette.panel))
                     .border_b_1()
                     .border_color(rgb(palette.border))
-                    .child(div().size(px(6.0)).rounded_sm().bg(rgb(palette.accent)))
+                    .child(div().size(px(6.0)).rounded_sm().bg(rgb(palette.switch_on)))
                     .child(line(0.5, palette.border_strong)),
             )
             .child(
@@ -1541,7 +1541,7 @@ fn theme_preview(mode: ThemeMode) -> Div {
                     .flex_col()
                     .gap(px(5.0))
                     .p(px(6.0))
-                    .child(line(0.85, palette.accent))
+                    .child(line(0.85, palette.switch_on))
                     .child(line(0.6, palette.border_strong))
                     .child(line(0.4, palette.border_strong)),
             )

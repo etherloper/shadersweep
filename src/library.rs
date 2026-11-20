@@ -51,7 +51,7 @@ fn find_exes(dir: &Path, depth: usize) -> Vec<(String, PathBuf)> {
 // ---- Steam ----------------------------------------------------------------------------
 
 fn steam_games() -> Vec<(String, PathBuf)> {
-    let steam_dir = steam_install_dir().unwrap_or_else(|| PathBuf::from(DEFAULT_STEAM_DIR));
+    let steam_dir = steam_root();
     let mut libraries = vec![steam_dir.clone()];
     if let Ok(vdf) = fs::read_to_string(steam_dir.join("steamapps").join("libraryfolders.vdf")) {
         libraries.extend(vdf_values(&vdf, "path").map(PathBuf::from));
@@ -87,6 +87,11 @@ fn vdf_values<'a>(text: &'a str, key: &'a str) -> impl Iterator<Item = String> +
         let value = parts.next()?;
         found_key.eq_ignore_ascii_case(key).then(|| value.replace(r"\\", r"\"))
     })
+}
+
+/// Steam's install folder, from the registry or the default location.
+pub fn steam_root() -> PathBuf {
+    steam_install_dir().unwrap_or_else(|| PathBuf::from(DEFAULT_STEAM_DIR))
 }
 
 fn steam_install_dir() -> Option<PathBuf> {

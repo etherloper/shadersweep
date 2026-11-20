@@ -16,6 +16,7 @@ use crate::cache::{self, AppCache, CacheFile, DeleteReport, ScanResult};
 use crate::format::{self, plural};
 use crate::library::{self, GameLibrary};
 use crate::locate::{self, SeenExes};
+use crate::steam_appinfo::{self, SteamCatalog, SteamCatalogEntry};
 use crate::native;
 use crate::processes::{self, RunningProcesses};
 use crate::settings::{self, Settings};
@@ -98,6 +99,8 @@ pub struct MainView {
     games: GameLibrary,
     /// Executables Windows has recorded this user launching, for apps outside the libraries.
     seen_exes: SeenExes,
+    /// Every Steam app the account has seen, keyed by install folder, for uninstalled games.
+    steam_catalog: SteamCatalog,
     running: RunningProcesses,
     /// `None` means loading was attempted and failed; the letter tile is shown instead.
     icons: HashMap<String, Option<Arc<RenderImage>>>,
@@ -135,6 +138,7 @@ impl MainView {
             refreshing: false,
             games: GameLibrary::new(),
             seen_exes: SeenExes::new(),
+            steam_catalog: SteamCatalog::new(),
             running: RunningProcesses::new(),
             icons: HashMap::new(),
             hide_small: settings.hide_small,
@@ -313,14 +317,18 @@ impl MainView {
     }
 
     fn load_games(&mut self, cx: &mut Context<Self>) {
-        let task = cx
-            .background_executor()
-            .spawn(async { (library::discover_games(), locate::discover()) });
+        let task = cx.background_executor().spawn(async {
+            // A missing or unreadable appinfo.vdf only costs names and icons for
+            // uninstalled Steam games, so it is not worth interrupting anyone over.
+            let steam_catalog = steam_appinfo::load_catalog(&library::steam_root()).unwrap_or_default();
+            (library::discover_games(), locate::discover(), steam_catalog)
+        });
         cx.spawn(async move |this, cx| {
-            let (games, seen_exes) = task.await;
+            let (games, seen_exes, steam_catalog) = task.await;
             this.update(cx, |this, cx| {
                 this.games = games;
                 this.seen_exes = seen_exes;
+                this.steam_catalog = steam_catalog;
                 this.load_missing_icons(cx);
                 cx.notify();
             })
@@ -356,22 +364,32 @@ impl MainView {
     /// library or a running process) and that have not been tried yet.
     fn load_missing_icons(&mut self, cx: &mut Context<Self>) {
         let Some(scan) = self.ready_scan() else { return };
-        let wanted: Vec<(String, PathBuf)> = scan
+        // The exe's own icon is preferred; Steam's cached artwork covers uninstalled games.
+        let wanted: Vec<(String, Option<PathBuf>, Option<PathBuf>)> = scan
             .apps
             .iter()
             .filter(|app| !self.icons.contains_key(&app.key))
-            .filter_map(|app| Some((app.key.clone(), self.exe_path(&app.key)?)))
+            .map(|app| {
+                let steam_icon = self.steam_entry(&app.key).and_then(|entry| entry.icon.clone());
+                (app.key.clone(), self.exe_path(&app.key), steam_icon)
+            })
+            .filter(|(_, exe, steam_icon)| exe.is_some() || steam_icon.is_some())
             .collect();
         if wanted.is_empty() {
             return;
         }
-        for (key, _) in &wanted {
+        for (key, _, _) in &wanted {
             self.icons.insert(key.clone(), None);
         }
         let task = cx.background_executor().spawn(async move {
             wanted
                 .into_iter()
-                .map(|(key, path)| (key, native::exe_icon(&path, ICON_PIXELS)))
+                .map(|(key, exe, steam_icon)| {
+                    let icon = exe
+                        .and_then(|path| native::exe_icon(&path, ICON_PIXELS))
+                        .or_else(|| steam_icon.and_then(|path| native::image_file_icon(&path)));
+                    (key, icon)
+                })
                 .collect::<Vec<_>>()
         });
         cx.spawn(async move |this, cx| {
@@ -550,6 +568,20 @@ impl MainView {
         self.seen_exes.get(key).map(|seen| (seen.path.clone(), seen.exists))
     }
 
+    /// Steam's record for an app whose last known exe sits in a Steam library folder.
+    fn steam_entry(&self, key: &str) -> Option<&SteamCatalogEntry> {
+        let seen = self.seen_exes.get(key)?;
+        let in_steam_library = seen
+            .path
+            .components()
+            .any(|c| c.as_os_str().eq_ignore_ascii_case("steamapps"));
+        if !in_steam_library {
+            return None;
+        }
+        let folder = locate::game_folder_name(&seen.path)?;
+        self.steam_catalog.get(&folder.to_lowercase())
+    }
+
     fn prune_selection(&mut self) {
         let existing: HashSet<String> = self.all_apps().iter().map(|app| app.key.clone()).collect();
         self.marked.retain(|key| existing.contains(key));
@@ -564,6 +596,9 @@ impl MainView {
         }
         if let Some(game) = self.games.get(&app.key) {
             return game.title.clone();
+        }
+        if let Some(entry) = self.steam_entry(&app.key) {
+            return entry.name.clone();
         }
         if let Some(name) = self.seen_exes.get(&app.key).and_then(|seen| seen.display_name()) {
             return name;

@@ -1,8 +1,8 @@
 # Shadersweep
 
-A small Windows app (Rust + [GPUI](https://www.gpui.rs/)) that shows what is inside NVIDIA's
-DirectX shader cache (`%LOCALAPPDATA%\NVIDIA\DXCache`), grouped by game, and lets you delete
-the cache for individual games instead of wiping the whole folder.
+Manage shader caches for individual games. Shadersweep is a small Windows app (Rust +
+[GPUI](https://www.gpui.rs/)) for NVIDIA's DirectX shader cache: see what each game is using and
+clear just the ones you choose.
 
 ## Download
 
@@ -18,8 +18,9 @@ Windows 10 or 11 (64-bit).
 
 - Groups every `.nvph` cache file by the program that created it.
 - Overview cards and a usage bar show where the space goes at a glance.
-- Shows friendly titles and real icons for installed Steam and Epic games
-  (`pbz.exe` → *Phantom Blade Zero*), and icons for running apps.
+- Shows real game names and icons (`pbz.exe` → *Phantom Blade Zero*) from your Steam and Epic
+  libraries, including Steam games you've since uninstalled.
+- Shows where each game's exe lives, with a button to open its folder.
 - Sort by name, last updated, file count or size. Filter to caches not updated recently and
   select them all in one click.
 - Deletes the cache for one game, several checked games, or straight from a row's trash button,

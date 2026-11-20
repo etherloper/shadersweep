@@ -38,6 +38,16 @@ pub fn exe_icon(path: &Path, size: u32) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(smallvec![image::Frame::new(buffer)])))
 }
 
+/// Loads an image file (Steam's cached `.jpg`/`.ico` artwork) as a BGRA icon.
+pub fn image_file_icon(path: &Path) -> Option<Arc<RenderImage>> {
+    let mut rgba = image::open(path).ok()?.to_rgba8();
+    // GPUI stores images as BGRA.
+    for pixel in rgba.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Some(Arc::new(RenderImage::new(smallvec![image::Frame::new(rgba)])))
+}
+
 /// Reads the colour bitmap of an icon as top-down BGRA rows (GPUI's native layout).
 unsafe fn icon_to_bgra(icon: HICON) -> Option<(u32, u32, Vec<u8>)> {
     unsafe {

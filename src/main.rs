@@ -10,6 +10,7 @@ mod locate;
 mod native;
 mod processes;
 mod settings;
+mod steam_appinfo;
 mod theme;
 mod ui;
 mod updater;
