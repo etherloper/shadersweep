@@ -17,12 +17,13 @@ Windows 10 or 11 (64-bit).
 ## Features
 
 - Groups every `.nvph` cache file by the program that created it.
-- Overview cards and a usage bar show where the space goes at a glance.
+- An overview splits the cache into installed games, uninstalled games and other apps, and
+  ranks the largest caches.
 - Shows real game names and icons (`pbz.exe` → *Phantom Blade Zero*) from your Steam and Epic
   libraries, including Steam games you've since uninstalled.
 - Shows where each game's exe lives, with a button to open its folder.
-- Sort by name, last updated, file count or size. Filter to caches not updated recently and
-  select them all in one click.
+- Sort by name, last updated, file count or size. Select every uninstalled game's cache in one
+  click.
 - Deletes the cache for one game, several checked games, or straight from a row's trash button,
   always after a confirmation.
 - Warns when a game is running. Files it has open are skipped and reported, never forced.

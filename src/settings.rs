@@ -8,14 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::theme::ThemeMode;
 
-pub const STALE_DAY_CHOICES: [u32; 4] = [14, 30, 60, 90];
-
+/// Missing fields take their defaults and unknown ones (from older versions) are ignored,
+/// so settings files stay readable across releases.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub theme: ThemeMode,
-    /// A cache not written to for this many days counts as "not updated recently".
-    pub stale_days: u32,
     /// Start with caches under 1 MB hidden.
     pub hide_small: bool,
     /// Look for a new release on startup (at most once a day). Installing always asks.
@@ -26,27 +24,13 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self {
-            theme: ThemeMode::System,
-            stale_days: 30,
-            hide_small: true,
-            auto_check_updates: true,
-            last_update_check: None,
-        }
+        Self { theme: ThemeMode::System, hide_small: true, auto_check_updates: true, last_update_check: None }
     }
 }
 
 impl Settings {
-    /// Unknown or out-of-range values (from a hand-edited file) fall back to defaults.
-    fn sanitized(mut self) -> Self {
-        if !STALE_DAY_CHOICES.contains(&self.stale_days) {
-            self.stale_days = Settings::default().stale_days;
-        }
-        self
-    }
-
     fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str::<Settings>(json).map(Settings::sanitized)
+        serde_json::from_str::<Settings>(json)
     }
 }
 
@@ -85,7 +69,6 @@ mod tests {
     fn round_trips_through_json() {
         let settings = Settings {
             theme: ThemeMode::Light,
-            stale_days: 60,
             hide_small: false,
             auto_check_updates: false,
             last_update_check: Some(1_700_000_000),
@@ -95,10 +78,10 @@ mod tests {
     }
 
     #[test]
-    fn fills_missing_and_invalid_fields_with_defaults() {
-        let settings = Settings::from_json(r#"{"theme":"dark","stale_days":7}"#).unwrap();
+    fn fills_missing_fields_and_ignores_old_ones() {
+        // `stale_days` was a setting in 0.1.x; files that still have it must keep loading.
+        let settings = Settings::from_json(r#"{"theme":"dark","stale_days":30}"#).unwrap();
         assert_eq!(settings.theme, ThemeMode::Dark);
-        assert_eq!(settings.stale_days, 30);
         assert!(settings.hide_small);
         assert!(Settings::from_json(r#"{"theme":"neon"}"#).is_err());
     }

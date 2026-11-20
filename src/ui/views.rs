@@ -15,7 +15,7 @@ use super::{
 use crate::assets::Icon;
 use crate::cache::AppCache;
 use crate::format::{self, plural};
-use crate::settings::{STALE_DAY_CHOICES, settings_path};
+use crate::settings::settings_path;
 use crate::theme::{self, Palette, ThemeMode, p};
 use crate::updater;
 
@@ -66,8 +66,7 @@ impl MainView {
                     .h_full()
                     .gap_1()
                     .child(view_tab("view-overview", Icon::Dashboard, "Overview", None, View::Overview))
-                    .child(view_tab("view-all", Icon::List, "All apps", Some(self.count_in(View::All)), View::All))
-                    .child(view_tab("view-stale", Icon::Clock, "Not updated", Some(self.count_in(View::Stale)), View::Stale)),
+                    .child(view_tab("view-all", Icon::List, "All apps", Some(self.visible_apps().len()), View::All)),
             )
             .when(list_view, |bar| {
                 bar.child(div().w(px(1.0)).h(px(20.0)).bg(rgb(p.border))).child(
@@ -122,7 +121,6 @@ impl MainView {
         }
         let total = scan.total_size.max(1);
         let groups = self.group_totals();
-        let days = self.settings.stale_days;
         let share = |size: u64| size as f64 / total as f64;
 
         let hero = div()
@@ -171,28 +169,22 @@ impl MainView {
         let rows = div().flex().flex_col().children(groups.iter().enumerate().map(|(row, (group, size, keys))| {
             let ix = *group as usize;
             let (name, description) = match group {
-                CacheGroup::GamesInUse => ("Games in use".to_owned(), format!("Updated in the last {days} days")),
-                CacheGroup::Stale => (format!("Not updated in {days}+ days"), "No new shaders recently".to_owned()),
-                CacheGroup::Uninstalled => ("Uninstalled games".to_owned(), "No longer on this PC, safe to clear".to_owned()),
-                CacheGroup::OtherApps => ("Other apps".to_owned(), "Browsers, launchers, Windows and unidentified files".to_owned()),
+                CacheGroup::InstalledGames => ("Installed games", "Games still on this PC"),
+                CacheGroup::Uninstalled => ("Uninstalled games", "No longer on this PC, safe to clear"),
+                CacheGroup::OtherApps => ("Other apps", "Browsers, launchers, Windows and unidentified files"),
             };
-            let action = match group {
-                CacheGroup::Stale | CacheGroup::Uninstalled if !keys.is_empty() => {
-                    let keys = keys.clone();
-                    let group = *group;
-                    Some(
-                        button(("select-group", ix), "Select", ButtonStyle::Secondary).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.marked.extend(keys.iter().cloned());
-                                this.hide_small = false;
-                                this.view = if group == CacheGroup::Stale { View::Stale } else { View::All };
-                                cx.notify();
-                            },
-                        )),
-                    )
-                }
-                _ => None,
-            };
+            // Only uninstalled games get a shortcut: their caches can't be used again.
+            let action = (*group == CacheGroup::Uninstalled && !keys.is_empty()).then(|| {
+                let keys = keys.clone();
+                button(("select-group", ix), "Select", ButtonStyle::Secondary).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.marked.extend(keys.iter().cloned());
+                        this.hide_small = false;
+                        this.view = View::All;
+                        cx.notify();
+                    },
+                ))
+            });
             div()
                 .flex()
                 .items_center()
@@ -210,7 +202,7 @@ impl MainView {
                         .child(div().text_xs().text_color(rgb(p.muted)).truncate().child(description)),
                 )
                 .child(div().w(px(70.0)).text_right().text_color(rgb(p.muted)).child(match group {
-                    CacheGroup::GamesInUse | CacheGroup::Uninstalled => plural(keys.len(), "game", "games"),
+                    CacheGroup::InstalledGames | CacheGroup::Uninstalled => plural(keys.len(), "game", "games"),
                     _ => plural(keys.len(), "app", "apps"),
                 }))
                 .child(
@@ -304,10 +296,9 @@ impl MainView {
             ScanState::Scanning => Some("Scanning the shader cache…".to_owned()),
             ScanState::Failed(err) => Some(err.clone()),
             ScanState::Ready(scan) if scan.apps.is_empty() => Some("The shader cache is empty.".into()),
-            ScanState::Ready(_) if visible_count == 0 => Some(match self.view {
-                View::Stale => format!("Every cache was updated in the last {} days.", self.settings.stale_days),
-                _ => "Nothing over 1 MB is cached. Turn off \"Hide under 1 MB\" to see everything.".into(),
-            }),
+            ScanState::Ready(_) if visible_count == 0 => {
+                Some("Nothing over 1 MB is cached. Turn off \"Hide under 1 MB\" to see everything.".into())
+            }
             ScanState::Ready(_) => None,
         };
 
@@ -406,7 +397,6 @@ impl MainView {
         let group: SharedString = format!("row-{ix}").into();
         let focused = self.focused.as_deref() == Some(app.key.as_str());
         let marked = self.marked.contains(&app.key);
-        let stale = self.is_stale(app, now);
         let name = self.display_name(app);
         let show_key = app.is_identified() && name != app.key;
         let fraction = (app.total_size as f64 / largest as f64).clamp(0.01, 1.0) as f32;
@@ -482,8 +472,7 @@ impl MainView {
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .text_color(rgb(if stale { p.warning } else { p.muted }))
-                    .when(stale, |cell| cell.child(icon(Icon::Clock, 13.0, p.warning)))
+                    .text_color(rgb(p.muted))
                     .child(format::age(app.last_modified, now)),
             )
             .child(div().w(px(48.0)).text_right().text_color(rgb(p.muted)).child(app.files.len().to_string()))
@@ -891,12 +880,6 @@ impl MainView {
                 .on_click(cx.listener(move |this, _, _, cx| this.set_theme(mode, cx)))
         }));
 
-        let stale_choices = segmented(STALE_DAY_CHOICES.iter().map(|&days| {
-            segment(("stale-days", days as usize), format!("{days} days").into(), self.settings.stale_days == days)
-                .on_click(cx.listener(move |this, _, _, cx| this.update_settings(cx, |s| s.stale_days = days)))
-                .into_any_element()
-        }));
-
         let hide_small_row = div()
             .id("setting-hide-small")
             .flex()
@@ -985,8 +968,6 @@ impl MainView {
                             .gap_3()
                             .child(section_label("Cache"))
                             .child(self.render_cache_folder(cx))
-                            .child(div().font_weight(FontWeight::MEDIUM).child("Count a cache as not updated after"))
-                            .child(div().flex().child(stale_choices))
                             .child(hide_small_row),
                     )
                     .child(self.render_update_section(cx))

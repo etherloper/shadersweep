@@ -87,21 +87,19 @@ impl SortKey {
 /// The overview's split of the cache. The order is fixed and matches `Palette::groups`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum CacheGroup {
-    GamesInUse = 0,
-    Stale = 1,
-    Uninstalled = 2,
-    OtherApps = 3,
+    InstalledGames = 0,
+    Uninstalled = 1,
+    OtherApps = 2,
 }
 
 impl CacheGroup {
-    const ALL: [CacheGroup; 4] = [CacheGroup::GamesInUse, CacheGroup::Stale, CacheGroup::Uninstalled, CacheGroup::OtherApps];
+    const ALL: [CacheGroup; 3] = [CacheGroup::InstalledGames, CacheGroup::Uninstalled, CacheGroup::OtherApps];
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Overview,
     All,
-    Stale,
 }
 
 pub struct MainView {
@@ -511,16 +509,6 @@ impl MainView {
 
     // ---- state helpers ----------------------------------------------------------------
 
-    fn stale_after(&self) -> Duration {
-        Duration::from_secs(u64::from(self.settings.stale_days) * 86_400)
-    }
-
-    fn is_stale(&self, app: &AppCache, now: SystemTime) -> bool {
-        app.last_modified
-            .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age >= self.stale_after())
-    }
-
     fn ready_scan(&self) -> Option<&ScanResult> {
         match &self.scan {
             ScanState::Ready(scan) => Some(scan),
@@ -533,12 +521,10 @@ impl MainView {
     }
 
     fn visible_apps(&self) -> Vec<&AppCache> {
-        let now = SystemTime::now();
         let mut apps: Vec<&AppCache> = self
             .all_apps()
             .iter()
             .filter(|app| !self.hide_small || app.total_size >= SMALL_CACHE_BYTES)
-            .filter(|app| self.view != View::Stale || self.is_stale(app, now))
             .collect();
         apps.sort_by(|a, b| {
             let order = match self.sort {
@@ -554,16 +540,6 @@ impl MainView {
             order.then_with(|| b.total_size.cmp(&a.total_size))
         });
         apps
-    }
-
-    /// How many rows a list tab shows, honouring "Hide under 1 MB", for its badge.
-    fn count_in(&self, view: View) -> usize {
-        let now = SystemTime::now();
-        self.all_apps()
-            .iter()
-            .filter(|app| !self.hide_small || app.total_size >= SMALL_CACHE_BYTES)
-            .filter(|app| view != View::Stale || self.is_stale(app, now))
-            .count()
     }
 
     fn app(&self, key: &str) -> Option<&AppCache> {
@@ -586,19 +562,16 @@ impl MainView {
         self.seen_exes.get(key).map(|seen| (seen.path.clone(), seen.exists))
     }
 
-    /// Which overview group an app belongs to. Groups don't overlap; the first rule that
-    /// matches wins, so an uninstalled game that is also stale counts as uninstalled.
-    /// Only games count as uninstalled: other apps often move between versioned folders
-    /// on update (`app-1.0.9…`), leaving a stale path behind while still installed.
-    fn group_of(&self, app: &AppCache, now: SystemTime) -> CacheGroup {
-        if self.is_game(&app.key) && matches!(self.exe_location(&app.key), Some((_, false))) {
-            CacheGroup::Uninstalled
-        } else if self.is_stale(app, now) {
-            CacheGroup::Stale
-        } else if self.is_game(&app.key) {
-            CacheGroup::GamesInUse
-        } else {
+    /// Which overview group an app belongs to. Only games count as uninstalled: other apps
+    /// often move between versioned folders on update (`app-1.0.9…`), leaving an old path
+    /// behind while still installed.
+    fn group_of(&self, app: &AppCache) -> CacheGroup {
+        if !self.is_game(&app.key) {
             CacheGroup::OtherApps
+        } else if matches!(self.exe_location(&app.key), Some((_, false))) {
+            CacheGroup::Uninstalled
+        } else {
+            CacheGroup::InstalledGames
         }
     }
 
@@ -609,11 +582,10 @@ impl MainView {
     }
 
     /// Total size and member keys for each group, in `CacheGroup::ALL` order.
-    fn group_totals(&self) -> [(CacheGroup, u64, Vec<String>); 4] {
-        let now = SystemTime::now();
+    fn group_totals(&self) -> [(CacheGroup, u64, Vec<String>); 3] {
         let mut totals = CacheGroup::ALL.map(|group| (group, 0u64, Vec::new()));
         for app in self.all_apps() {
-            let slot = &mut totals[self.group_of(app, now) as usize];
+            let slot = &mut totals[self.group_of(app) as usize];
             slot.1 += app.total_size;
             slot.2.push(app.key.clone());
         }
@@ -800,9 +772,7 @@ impl Render for MainView {
                     .min_h_0()
                     .map(|body| match self.view {
                         View::Overview => body.child(self.render_overview(cx)),
-                        View::All | View::Stale => {
-                            body.child(self.render_list(cx)).children(self.render_detail(cx))
-                        }
+                        View::All => body.child(self.render_list(cx)).children(self.render_detail(cx)),
                     }),
             )
             .children(self.render_selection_bar(cx))

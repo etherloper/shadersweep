@@ -1,7 +1,7 @@
 //! Small stateless building blocks shared by the views. Colours come from the active palette.
 
 use gpui::{
-    AnyElement, Div, ElementId, FontWeight, Hsla, SharedString, Stateful, Svg, div, prelude::*, px, rgb, svg,
+    Div, ElementId, FontWeight, Hsla, SharedString, Stateful, Svg, div, prelude::*, px, rgb, svg,
 };
 
 use crate::assets::Icon;
@@ -186,40 +186,6 @@ pub fn toggle(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> 
         .text_color(rgb(p.muted))
         .hover(|t| t.text_color(rgb(p.text)))
         .child(switch(on))
-        .child(label)
-}
-
-pub fn segmented(children: impl IntoIterator<Item = AnyElement>) -> Div {
-    let p = p();
-    div()
-        .flex()
-        .flex_none()
-        .p(px(3.0))
-        .gap_1()
-        .rounded_md()
-        .bg(rgb(p.bg))
-        .border_1()
-        .border_color(rgb(p.border))
-        .children(children)
-}
-
-pub fn segment(id: impl Into<ElementId>, label: SharedString, active: bool) -> Stateful<Div> {
-    let p = p();
-    div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded(px(5.0))
-        .text_sm()
-        .cursor_pointer()
-        .when(active, |s| {
-            s.bg(rgb(p.raised))
-                .border_1()
-                .border_color(rgb(p.border_strong))
-                .text_color(rgb(p.text))
-                .font_weight(FontWeight::MEDIUM)
-        })
-        .when(!active, |s| s.text_color(rgb(p.muted)).hover(|s| s.text_color(rgb(p.text))))
         .child(label)
 }
 
