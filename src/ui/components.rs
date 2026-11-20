@@ -223,6 +223,51 @@ pub fn segment(id: impl Into<ElementId>, label: SharedString, active: bool) -> S
         .child(label)
 }
 
+/// A top-bar tab: icon, label and optional count, underlined when active. Fills the bar's
+/// height so the underline sits on the bar's bottom edge.
+pub fn tab(id: impl Into<ElementId>, glyph: Icon, label: &'static str, count: Option<usize>, active: bool) -> Stateful<Div> {
+    let p = p();
+    let ink = if active { p.text } else { p.muted };
+    div()
+        .id(id)
+        .relative()
+        .h_full()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .cursor_pointer()
+        .text_sm()
+        .text_color(rgb(ink))
+        .when(active, |t| t.font_weight(FontWeight::MEDIUM))
+        .when(!active, |t| t.hover(|t| t.text_color(rgb(p.text))))
+        .child(icon(glyph, 16.0, ink))
+        .child(label)
+        .children(count.map(|n| {
+            div()
+                .min_w(px(20.0))
+                .px_1p5()
+                .flex()
+                .justify_center()
+                .rounded_full()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .when(active, |b| b.bg(rgb(p.switch_on)).text_color(rgb(p.switch_knob_on)))
+                .when(!active, |b| b.bg(rgb(p.raised)).border_1().border_color(rgb(p.border)).text_color(rgb(p.muted)))
+                .child(n.to_string())
+        }))
+        .child(
+            div()
+                .absolute()
+                .bottom_0()
+                .left(px(8.0))
+                .right(px(8.0))
+                .h(px(2.0))
+                .rounded_full()
+                .when(active, |line| line.bg(rgb(p.text))),
+        )
+}
+
 pub fn badge(label: &'static str, tint: u32) -> Div {
     div()
         .flex_none()

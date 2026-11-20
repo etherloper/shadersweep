@@ -556,9 +556,14 @@ impl MainView {
         apps
     }
 
-    fn stale_apps(&self) -> Vec<&AppCache> {
+    /// How many rows a list tab shows, honouring "Hide under 1 MB", for its badge.
+    fn count_in(&self, view: View) -> usize {
         let now = SystemTime::now();
-        self.all_apps().iter().filter(|app| self.is_stale(app, now)).collect()
+        self.all_apps()
+            .iter()
+            .filter(|app| !self.hide_small || app.total_size >= SMALL_CACHE_BYTES)
+            .filter(|app| view != View::Stale || self.is_stale(app, now))
+            .count()
     }
 
     fn app(&self, key: &str) -> Option<&AppCache> {

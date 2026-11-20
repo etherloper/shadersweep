@@ -20,6 +20,7 @@ use crate::theme::{self, Palette, ThemeMode, p};
 use crate::updater;
 
 const ROW_HEIGHT: f32 = 60.0;
+const TOP_BAR_HEIGHT: f32 = 52.0;
 const DETAIL_WIDTH: f32 = 380.0;
 const SETTINGS_WIDTH: f32 = 400.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
@@ -42,37 +43,34 @@ impl MainView {
 
     pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = p();
-        let stale_count = self.stale_apps().len();
         let shown = self.visible_apps().len();
         let list_view = self.view != View::Overview;
-        let tab = |id: &'static str, label: SharedString, view: View| {
-            segment(id, label, self.view == view)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.view = view;
-                    cx.notify();
-                }))
-                .into_any_element()
+        let view_tab = |id: &'static str, glyph: Icon, label: &'static str, count: Option<usize>, view: View| {
+            tab(id, glyph, label, count, self.view == view).on_click(cx.listener(move |this, _, _, cx| {
+                this.view = view;
+                cx.notify();
+            }))
         };
         div()
             .flex()
             .items_center()
             .gap_4()
-            .px_4()
-            .py_2p5()
+            .h(px(TOP_BAR_HEIGHT))
+            .px_3()
             .bg(rgb(p.panel))
             .border_b_1()
             .border_color(rgb(p.border))
-            .child(segmented([
-                tab("view-overview", "Overview".into(), View::Overview),
-                tab("view-all", "All apps".into(), View::All),
-                tab(
-                    "view-stale",
-                    format!("Not updated in {}+ days ({stale_count})", self.settings.stale_days).into(),
-                    View::Stale,
-                ),
-            ]))
+            .child(
+                div()
+                    .flex()
+                    .h_full()
+                    .gap_1()
+                    .child(view_tab("view-overview", Icon::Dashboard, "Overview", None, View::Overview))
+                    .child(view_tab("view-all", Icon::List, "All apps", Some(self.count_in(View::All)), View::All))
+                    .child(view_tab("view-stale", Icon::Clock, "Not updated", Some(self.count_in(View::Stale)), View::Stale)),
+            )
             .when(list_view, |bar| {
-                bar.child(
+                bar.child(div().w(px(1.0)).h(px(20.0)).bg(rgb(p.border))).child(
                     toggle("hide-small", "Hide under 1 MB", self.hide_small)
                         .on_click(cx.listener(|this, _, _, cx| this.set_hide_small(!this.hide_small, cx))),
                 )
