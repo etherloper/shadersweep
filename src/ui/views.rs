@@ -32,6 +32,14 @@ const LARGEST_LIST_LEN: usize = 10;
 const ENTRANCE: Duration = Duration::from_millis(180);
 
 impl MainView {
+    /// The launcher's own icon when it is installed, otherwise its name as a badge.
+    fn launcher_mark(&self, launcher: &'static str) -> AnyElement {
+        match self.launcher_icons.get(launcher) {
+            Some(icon) => img(icon.clone()).size(px(16.0)).flex_none().into_any_element(),
+            None => badge(launcher, p().muted).into_any_element(),
+        }
+    }
+
     fn app_icon(&self, app: &AppCache, size: f32) -> AnyElement {
         match self.icons.get(&app.key) {
             Some(Some(image)) => img(image.clone()).size(px(size)).flex_none().into_any_element(),
@@ -507,7 +515,7 @@ impl MainView {
                             .items_center()
                             .gap_1p5()
                             .when(show_key, |row| row.child(div().text_xs().text_color(rgb(p.muted)).child(app.key.clone())))
-                            .children(launcher.map(|name| badge(name, p.muted)))
+                            .children(launcher.map(|name| self.launcher_mark(name)))
                             .when(self.is_running(app), |row| row.child(badge("Running", p.warning))),
                     ),
             )

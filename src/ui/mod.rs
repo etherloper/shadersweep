@@ -113,6 +113,8 @@ pub struct MainView {
     seen_exes: SeenExes,
     /// Every Steam app the account has seen, keyed by install folder, for uninstalled games.
     steam_catalog: SteamCatalog,
+    /// Launcher name (as in `source_of`) → that launcher's own icon, where it is installed.
+    launcher_icons: HashMap<&'static str, Arc<RenderImage>>,
     running: RunningProcesses,
     /// `None` means loading was attempted and failed; the letter tile is shown instead.
     icons: HashMap<String, Option<Arc<RenderImage>>>,
@@ -153,6 +155,7 @@ impl MainView {
             games: GameLibrary::new(),
             seen_exes: SeenExes::new(),
             steam_catalog: SteamCatalog::new(),
+            launcher_icons: HashMap::new(),
             running: RunningProcesses::new(),
             icons: HashMap::new(),
             settings,
@@ -344,14 +347,17 @@ impl MainView {
             // A missing or unreadable appinfo.vdf only costs names and icons for
             // uninstalled Steam games, so it is not worth interrupting anyone over.
             let steam_catalog = steam_appinfo::load_catalog(&library::steam_root()).unwrap_or_default();
-            (library::discover_games(), locate::discover(), steam_catalog)
+            let seen_exes = locate::discover();
+            let launcher_icons = load_launcher_icons(&seen_exes);
+            (library::discover_games(), seen_exes, steam_catalog, launcher_icons)
         });
         cx.spawn(async move |this, cx| {
-            let (games, seen_exes, steam_catalog) = task.await;
+            let (games, seen_exes, steam_catalog, launcher_icons) = task.await;
             this.update(cx, |this, cx| {
                 this.games = games;
                 this.seen_exes = seen_exes;
                 this.steam_catalog = steam_catalog;
+                this.launcher_icons = launcher_icons;
                 this.load_missing_icons(cx);
                 cx.notify();
             })
@@ -810,6 +816,23 @@ impl Render for MainView {
             .children(self.render_toast(cx))
             .children(self.render_confirm(cx))
     }
+}
+
+/// Icons taken from the installed launchers themselves, located through Windows' launch
+/// records first and default install folders second. Launchers that aren't found are
+/// simply absent, and their name is shown instead.
+fn load_launcher_icons(seen_exes: &SeenExes) -> HashMap<&'static str, Arc<RenderImage>> {
+    library::launcher_exes()
+        .into_iter()
+        .filter_map(|(name, exe, defaults)| {
+            let path = seen_exes
+                .get(exe)
+                .filter(|seen| seen.exists)
+                .map(|seen| seen.path.clone())
+                .or_else(|| defaults.into_iter().find(|path| path.is_file()))?;
+            Some((name, native::exe_icon(&path, ICON_PIXELS)?))
+        })
+        .collect()
 }
 
 fn percent(part: u64, whole: u64) -> String {

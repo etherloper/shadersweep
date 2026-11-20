@@ -39,6 +39,21 @@ pub fn discover_games() -> GameLibrary {
     games
 }
 
+/// Launchers whose own icon can stand in for their name: display name (as used for game
+/// sources), lowercased exe file name, and default install locations.
+pub fn launcher_exes() -> [(&'static str, &'static str, Vec<PathBuf>); 3] {
+    let epic = r"Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe";
+    [
+        ("Steam", "steam.exe", vec![steam_root().join("steam.exe")]),
+        (
+            "Epic Games",
+            "epicgameslauncher.exe",
+            vec![Path::new(r"C:\Program Files (x86)").join(epic), Path::new(r"C:\Program Files").join(epic)],
+        ),
+        ("GOG", "galaxyclient.exe", vec![PathBuf::from(r"C:\Program Files (x86)\GOG Galaxy\GalaxyClient.exe")]),
+    ]
+}
+
 /// `(lowercased file name, full path)` of every `.exe` under `dir`.
 fn find_exes(dir: &Path, depth: usize) -> Vec<(String, PathBuf)> {
     let mut exes = Vec::new();
