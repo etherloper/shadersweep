@@ -25,7 +25,7 @@ use crate::updater::{self, Release};
 
 const SMALL_CACHE_BYTES: u64 = 1024 * 1024;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_secs(3);
-const NOTICE_DURATION: Duration = Duration::from_secs(6);
+const NOTICE_DURATION: Duration = Duration::from_secs(3);
 /// Toasts with a button stay up longer so there is time to reach it.
 const ACTION_NOTICE_DURATION: Duration = Duration::from_secs(12);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);

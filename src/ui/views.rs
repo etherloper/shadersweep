@@ -748,8 +748,7 @@ impl MainView {
         )
     }
 
-    /// A compact pill at the bottom centre. Toasts are dark in both themes, so their
-    /// status colours come from the dark palette.
+    /// A compact pill at the bottom centre, following the active theme.
     pub(super) fn render_toast(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let p = p();
         let notice = self.notice.as_ref()?;
@@ -758,9 +757,9 @@ impl MainView {
             return None;
         }
         let (glyph, tint) = match notice.kind {
-            NoticeKind::Success => (Icon::Check, theme::DARK.accent),
-            NoticeKind::Warning => (Icon::Alert, theme::DARK.warning),
-            NoticeKind::Error => (Icon::Alert, theme::DARK.danger),
+            NoticeKind::Success => (Icon::Check, p.accent),
+            NoticeKind::Warning => (Icon::Alert, p.warning),
+            NoticeKind::Error => (Icon::Alert, p.danger),
         };
         let bottom = if self.marked.is_empty() { 20.0 } else { 76.0 };
         Some(
@@ -793,7 +792,7 @@ impl MainView {
                                 .rounded_full()
                                 .cursor_pointer()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::DARK.accent))
+                                .text_color(rgb(p.accent))
                                 .hover(|b| b.bg(with_alpha(p.toast_text, 0.12)))
                                 .child(label)
                                 .on_click(cx.listener(move |this, _, _, cx| this.run_notice_action(action, cx))),
