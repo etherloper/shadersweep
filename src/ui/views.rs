@@ -22,7 +22,7 @@ use crate::updater;
 const ROW_HEIGHT: f32 = 60.0;
 const TOP_BAR_HEIGHT: f32 = 52.0;
 const DETAIL_WIDTH: f32 = 380.0;
-const SETTINGS_WIDTH: f32 = 400.0;
+const SETTINGS_COLUMN_WIDTH: f32 = 720.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
 /// Below this share a segment is too narrow to hold its percentage label.
 const SEGMENT_LABEL_MIN_SHARE: f64 = 0.06;
@@ -37,18 +37,16 @@ impl MainView {
         }
     }
 
-    // ---- header and overview ----------------------------------------------------------
-
     // ---- top bar ---------------------------------------------------------------------
 
     pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = p();
         let shown = self.visible_apps().len();
-        let list_view = self.view != View::Overview;
+        let list_view = self.view == View::All;
+        let update_waiting = matches!(self.update, UpdateState::Available(_));
         let view_tab = |id: &'static str, glyph: Icon, label: &'static str, count: Option<usize>, view: View| {
             tab(id, glyph, label, count, self.view == view).on_click(cx.listener(move |this, _, _, cx| {
-                this.view = view;
-                cx.notify();
+                this.show_view(view, cx);
             }))
         };
         div()
@@ -85,25 +83,11 @@ impl MainView {
                 )
             })
             .child(
-                icon_button("open-settings", Some(Icon::Settings), "Settings", ButtonStyle::Secondary)
-                    .relative()
-                    .when(matches!(self.update, UpdateState::Available(_)), |b| {
-                        b.child(
-                            div()
-                                .absolute()
-                                .top(px(-3.0))
-                                .right(px(-3.0))
-                                .size(px(10.0))
-                                .rounded_full()
-                                .border_2()
-                                .border_color(rgb(p.panel))
-                                .bg(rgb(p.accent)),
-                        )
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.settings_open = true;
-                        cx.notify();
-                    })),
+                div().flex().h_full().child(
+                    view_tab("view-settings", Icon::Settings, "Settings", None, View::Settings)
+                        // A waiting update is announced on the tab itself.
+                        .when(update_waiting, |t| t.child(div().size(px(7.0)).rounded_full().bg(rgb(p.accent)))),
+                ),
             )
     }
 
@@ -763,7 +747,7 @@ impl MainView {
         let p = p();
         let notice = self.notice.as_ref()?;
         // The update toast only points at Settings; once they are open it has done its job.
-        if self.settings_open && notice.action.is_some_and(|(action, _)| action == NoticeAction::OpenSettings) {
+        if self.view == View::Settings && notice.action.is_some_and(|(action, _)| action == NoticeAction::OpenSettings) {
             return None;
         }
         let (glyph, tint) = match notice.kind {
@@ -834,22 +818,15 @@ impl MainView {
         )
     }
 
-    pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if !self.settings_open {
-            return None;
-        }
+    /// The Settings tab: section cards in a centred column, styled like the Overview.
+    pub(super) fn render_settings_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = p();
-        let close = cx.listener(|this, _, _, cx| {
-            this.settings_open = false;
-            cx.notify();
-        });
-
         let themes = [
             (ThemeMode::System, Icon::Monitor, "System"),
             (ThemeMode::Light, Icon::Sun, "Light"),
             (ThemeMode::Dark, Icon::Moon, "Dark"),
         ];
-        let theme_cards = div().flex().gap_2().children(themes.into_iter().enumerate().map(|(ix, (mode, glyph, label))| {
+        let theme_cards = div().flex().gap_3().children(themes.into_iter().enumerate().map(|(ix, (mode, glyph, label))| {
             let active = self.settings.theme == mode;
             div()
                 .id(("theme", ix))
@@ -911,108 +888,54 @@ impl MainView {
             ("↑ ↓", "Move between apps"),
             ("Space", "Check or uncheck"),
             ("Delete", "Delete checked or current"),
-            ("Esc", "Deselect, clear or close"),
+            ("Esc", "Deselect, or leave Settings"),
             ("F5", "Rescan"),
-            ("Ctrl ,", "Open settings"),
+            ("Ctrl ,", "Open Settings"),
         ];
+        let keyboard = div().flex().flex_col().children(shortcuts.into_iter().enumerate().map(|(ix, (keys, action))| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .py_2()
+                .text_sm()
+                .when(ix > 0, |row| row.border_t_1().border_color(rgb(p.border)))
+                .child(div().text_color(rgb(p.muted)).child(action))
+                .child(kbd(keys))
+        }));
 
-        let sheet = div()
-            .id("settings-sheet")
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .right_0()
-            .w(px(SETTINGS_WIDTH))
+        let column = div()
+            .w_full()
+            .max_w(px(SETTINGS_COLUMN_WIDTH))
             .flex()
             .flex_col()
-            .bg(rgb(p.panel))
-            .border_l_1()
-            .border_color(rgb(p.border_strong))
-            .shadow_lg()
-            .occlude()
+            .gap_4()
+            .child(div().pb_1().text_xl().font_weight(FontWeight::SEMIBOLD).child("Settings"))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .px_5()
-                    .py_4()
-                    .border_b_1()
-                    .border_color(rgb(p.border))
-                    .child(div().flex_1().text_lg().font_weight(FontWeight::SEMIBOLD).child("Settings"))
-                    .child(square_button("close-settings", Icon::X, 32.0, p.muted).on_click(close)),
+                settings_card("Appearance", Some("System follows your Windows app mode. Dark uses a true black background."))
+                    .child(theme_cards),
             )
             .child(
-                div()
-                    .id("settings-body")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_6()
-                    .p_5()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .child(section_label("Appearance"))
-                            .child(theme_cards)
-                            .child(div().text_xs().text_color(rgb(p.muted)).child(
-                                "System follows your Windows app mode. Dark uses a true black background.",
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .child(section_label("Cache"))
-                            .child(self.render_cache_folder(cx))
-                            .child(hide_small_row),
-                    )
-                    .child(self.render_update_section(cx))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(section_label("Keyboard"))
-                            .children(shortcuts.into_iter().map(|(keys, action)| {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .text_sm()
-                                    .child(div().text_color(rgb(p.muted)).child(action))
-                                    .child(kbd(keys))
-                            })),
-                    )
-                    .child(div().flex().flex_col().gap_3().child(section_label("About")).child(about_card())),
+                settings_card("Cache", None)
+                    .child(self.render_cache_folder(cx))
+                    .child(hide_small_row),
             )
-            .with_animation(
-                "settings-in",
-                Animation::new(ENTRANCE).with_easing(ease_out_quint()),
-                |sheet, delta| sheet.opacity(delta).right(px(-24.0 * (1.0 - delta))),
-            );
+            .child(settings_card("Updates", None).child(self.render_update_section(cx)))
+            .child(settings_card("Keyboard", None).child(keyboard))
+            .child(about_card());
 
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .child(
-                    div()
-                        .id("settings-backdrop")
-                        .absolute()
-                        .inset_0()
-                        .bg(rgba(p.backdrop))
-                        .occlude()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.settings_open = false;
-                            cx.notify();
-                        })),
-                )
-                .child(sheet),
-        )
+        // A vertical flex container lets the column keep its full height and overflow, which
+        // is what makes the page scroll; in a row it would be stretched to fit instead.
+        div()
+            .id("settings-page")
+            .flex_1()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .items_center()
+            .p_5()
+            .child(column.flex_none())
+            .into_any_element()
     }
 
     fn render_cache_folder(&self, cx: &mut Context<Self>) -> Div {
@@ -1196,7 +1119,7 @@ impl MainView {
                 this.update_settings(cx, |s| s.auto_check_updates = !s.auto_check_updates)
             }));
 
-        div().flex().flex_col().gap_3().child(section_label("Updates")).child(status).child(auto_row)
+        div().flex().flex_col().gap_3().child(status).child(auto_row)
     }
 
     pub(super) fn render_confirm(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -1410,6 +1333,28 @@ fn app_logo(size: f32) -> Div {
         .child(bar(18.0))
         .child(bar(13.0))
         .child(bar(8.0))
+}
+
+/// A section of the Settings tab: a panel card with a title and optional explanation.
+fn settings_card(title: &'static str, description: Option<&'static str>) -> Div {
+    let p = p();
+    div()
+        .flex()
+        .flex_col()
+        .gap_4()
+        .p_5()
+        .rounded_lg()
+        .bg(rgb(p.panel))
+        .border_1()
+        .border_color(rgb(p.border))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(title))
+                .children(description.map(|text| div().text_xs().text_color(rgb(p.muted)).child(text))),
+        )
 }
 
 fn about_card() -> Div {

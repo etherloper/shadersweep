@@ -276,12 +276,3 @@ pub fn stat(label: &'static str, value: String) -> Div {
         .child(div().text_xs().text_color(rgb(p.muted)).child(label))
         .child(div().font_weight(FontWeight::SEMIBOLD).child(value))
 }
-
-/// Section heading used in the settings sheet.
-pub fn section_label(text: &'static str) -> Div {
-    div()
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(p().muted))
-        .child(text.to_uppercase())
-}

@@ -100,6 +100,7 @@ impl CacheGroup {
 enum View {
     Overview,
     All,
+    Settings,
 }
 
 pub struct MainView {
@@ -116,7 +117,8 @@ pub struct MainView {
     /// `None` means loading was attempted and failed; the letter tile is shown instead.
     icons: HashMap<String, Option<Arc<RenderImage>>>,
     settings: Settings,
-    settings_open: bool,
+    /// The tab Settings was opened from; Esc returns there.
+    previous_view: View,
     /// Theme last pushed to the native title bar, to avoid redundant DWM calls.
     title_bar_dark: Option<bool>,
     focused: Option<String>,
@@ -154,7 +156,7 @@ impl MainView {
             icons: HashMap::new(),
             hide_small: settings.hide_small,
             settings,
-            settings_open: false,
+            previous_view: View::All,
             title_bar_dark: None,
             focused: None,
             marked: BTreeSet::new(),
@@ -207,7 +209,7 @@ impl MainView {
                 match result {
                     Ok(Some(release)) => {
                         this.update_settings(cx, |s| s.last_update_check = Some(now));
-                        if !this.settings_open {
+                        if this.view != View::Settings {
                             this.show_notice_with_action(
                                 NoticeKind::Success,
                                 format!("Shadersweep {} is available", release.version),
@@ -285,9 +287,18 @@ impl MainView {
 
     fn run_notice_action(&mut self, action: NoticeAction, cx: &mut Context<Self>) {
         match action {
-            NoticeAction::OpenSettings => self.settings_open = true,
+            NoticeAction::OpenSettings => self.show_view(View::Settings, cx),
         }
         self.notice = None;
+        cx.notify();
+    }
+
+    /// Switches tabs, remembering where Settings was opened from so Esc can go back.
+    fn show_view(&mut self, view: View, cx: &mut Context<Self>) {
+        if view == View::Settings && self.view != View::Settings {
+            self.previous_view = self.view;
+        }
+        self.view = view;
         cx.notify();
     }
 
@@ -706,16 +717,16 @@ impl MainView {
             }
             return;
         }
-        if self.settings_open {
-            if key == "escape" {
-                self.settings_open = false;
-                cx.notify();
-            }
+        if key == "," && event.keystroke.modifiers.control {
+            self.show_view(View::Settings, cx);
             return;
         }
-        if key == "," && event.keystroke.modifiers.control {
-            self.settings_open = true;
-            cx.notify();
+        if self.view == View::Settings {
+            if key == "escape" {
+                self.show_view(self.previous_view, cx);
+            } else if key == "f5" {
+                self.rescan(cx);
+            }
             return;
         }
         match key {
@@ -773,11 +784,11 @@ impl Render for MainView {
                     .map(|body| match self.view {
                         View::Overview => body.child(self.render_overview(cx)),
                         View::All => body.child(self.render_list(cx)).children(self.render_detail(cx)),
+                        View::Settings => body.child(self.render_settings_page(cx)),
                     }),
             )
             .children(self.render_selection_bar(cx))
             .children(self.render_toast(cx))
-            .children(self.render_settings(cx))
             .children(self.render_confirm(cx))
     }
 }
