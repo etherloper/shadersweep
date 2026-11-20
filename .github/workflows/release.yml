@@ -1,7 +1,7 @@
 # Builds shadersweep.exe and publishes a GitHub release when a version tag is pushed:
 #   git tag v0.4.0 && git push origin v0.4.0
 # The in-app updater looks for exactly these two assets: shadersweep.exe and
-# shadersweep.exe.sha256.
+# shadersweep.exe.sha256. The installer is attached alongside them for new users.
 name: Release
 
 on:
@@ -41,10 +41,23 @@ jobs:
           $hash = (Get-FileHash dist/shadersweep.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  shadersweep.exe" | Out-File -Encoding ascii -NoNewline dist/shadersweep.exe.sha256
 
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1
+          }
+          & $iscc.FullName /Q "/DSourceExe=$PWD\dist\shadersweep.exe" installer\shadersweep.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          Copy-Item target\installer\shadersweep-setup-*.exe dist\
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/shadersweep.exe
             dist/shadersweep.exe.sha256
+            dist/shadersweep-setup-*.exe
           generate_release_notes: true
