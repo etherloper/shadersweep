@@ -1,0 +1,50 @@
+# Builds shadersweep.exe and publishes a GitHub release when a version tag is pushed:
+#   git tag v0.4.0 && git push origin v0.4.0
+# The in-app updater looks for exactly these two assets: shadersweep.exe and
+# shadersweep.exe.sha256.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match Cargo.toml version $version"
+          }
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Prepare assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/shadersweep.exe dist/shadersweep.exe
+          $hash = (Get-FileHash dist/shadersweep.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  shadersweep.exe" | Out-File -Encoding ascii -NoNewline dist/shadersweep.exe.sha256
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/shadersweep.exe
+            dist/shadersweep.exe.sha256
+          generate_release_notes: true
