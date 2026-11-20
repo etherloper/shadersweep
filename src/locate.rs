@@ -12,7 +12,8 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, REG_SZ, RegCloseKey, RegEnumValueW, RegOpenKeyExW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey,
+    RegEnumKeyExW, RegEnumValueW, RegGetValueW, RegOpenKeyExW,
 };
 
 const MUI_CACHE: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache";
@@ -128,12 +129,107 @@ pub fn launcher_name(path: &Path) -> Option<&'static str> {
     .map(|(_, name)| name)
 }
 
-/// Value names (and string data, when asked) under an HKCU key. Missing keys yield nothing.
-fn read_values(subkey: &str, want_strings: bool) -> Vec<(String, Option<String>)> {
-    let wide: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
+/// Game install folders paired with the launcher that installed them.
+pub type LauncherInstalls = Vec<(PathBuf, &'static str)>;
+
+/// Windows' lists of installed programs (per machine, 32-bit view, and per user).
+const UNINSTALL_KEYS: [(HKEY, &str); 3] = [
+    (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    (HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    (HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+];
+
+/// Launchers that install each game in its own folder, recognised by their uninstaller:
+/// (text in the entry's UninstallString, launcher name).
+const LAUNCHER_UNINSTALLERS: [(&str, &str); 1] = [("blizzard uninstaller", "Battle.net")];
+
+/// Games installed by launchers without a shared library folder (Battle.net), taken from
+/// Windows' list of installed programs. The launchers' own entries are left out.
+pub fn launcher_installs() -> LauncherInstalls {
+    let mut installs = LauncherInstalls::new();
+    for (root, path) in UNINSTALL_KEYS {
+        for entry in subkey_names(root, path) {
+            let key = format!(r"{path}\{entry}");
+            let Some(uninstall) = read_string(root, &key, "UninstallString") else { continue };
+            let uninstall = uninstall.to_lowercase();
+            let Some(&(_, launcher)) = LAUNCHER_UNINSTALLERS.iter().find(|(marker, _)| uninstall.contains(marker)) else {
+                continue;
+            };
+            if read_string(root, &key, "DisplayName").is_some_and(|name| name.eq_ignore_ascii_case(launcher)) {
+                continue;
+            }
+            let Some(location) = read_string(root, &key, "InstallLocation") else { continue };
+            let dir = location.trim().trim_matches('"').trim_end_matches(['\\', '/']);
+            if !dir.is_empty() {
+                installs.push((PathBuf::from(dir), launcher));
+            }
+        }
+    }
+    installs
+}
+
+/// The launcher install (folder, launcher) that contains `exe`.
+pub fn installed_by<'a>(installs: &'a LauncherInstalls, exe: &Path) -> Option<&'a (PathBuf, &'static str)> {
+    let exe = exe.to_string_lossy().to_lowercase();
+    installs.iter().find(|(dir, _)| exe.starts_with(&format!(r"{}\", dir.to_string_lossy().to_lowercase())))
+}
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
+
+fn subkey_names(root: HKEY, path: &str) -> Vec<String> {
     let mut key: HKEY = ptr::null_mut();
     // SAFETY: valid NUL-terminated key path; the handle is closed below.
-    if unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, wide.as_ptr(), 0, KEY_READ, &mut key) } != ERROR_SUCCESS {
+    if unsafe { RegOpenKeyExW(root, wide(path).as_ptr(), 0, KEY_READ, &mut key) } != ERROR_SUCCESS {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    let mut name = [0u16; 256];
+    for index in 0.. {
+        let mut len = name.len() as u32;
+        // SAFETY: `name` holds `len` characters; the optional out-parameters are null.
+        let status = unsafe {
+            RegEnumKeyExW(key, index, name.as_mut_ptr(), &mut len, ptr::null(), ptr::null_mut(), ptr::null_mut(), ptr::null_mut())
+        };
+        if status != ERROR_SUCCESS {
+            break;
+        }
+        names.push(String::from_utf16_lossy(&name[..len as usize]));
+    }
+    // SAFETY: `key` was opened above.
+    unsafe { RegCloseKey(key) };
+    names
+}
+
+fn read_string(root: HKEY, subkey: &str, value: &str) -> Option<String> {
+    let mut buf = vec![0u16; 1024];
+    let mut bytes = (buf.len() * 2) as u32;
+    // SAFETY: `buf` is valid for `bytes`; the key path and value name are NUL-terminated.
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            wide(subkey).as_ptr(),
+            wide(value).as_ptr(),
+            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+            ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let chars = (bytes as usize / 2).min(buf.len());
+    let end = buf[..chars].iter().position(|&c| c == 0).unwrap_or(chars);
+    Some(String::from_utf16_lossy(&buf[..end]))
+}
+
+/// Value names (and string data, when asked) under an HKCU key. Missing keys yield nothing.
+fn read_values(subkey: &str, want_strings: bool) -> Vec<(String, Option<String>)> {
+    let mut key: HKEY = ptr::null_mut();
+    // SAFETY: valid NUL-terminated key path; the handle is closed below.
+    if unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, wide(subkey).as_ptr(), 0, KEY_READ, &mut key) } != ERROR_SUCCESS {
         return Vec::new();
     }
     let mut values = Vec::new();
@@ -191,6 +287,15 @@ mod tests {
         assert_eq!(name(r"C:\Program Files (x86)\GOG Galaxy\Games\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe").as_deref(), Some("Cyberpunk 2077"));
         assert_eq!(name(r"C:\Tools\vidi\vidi.exe"), None);
         assert_eq!(name(r"C:\Program Files\Epic Games\launcher.exe"), None);
+    }
+
+    #[test]
+    fn matches_exes_to_launcher_install_folders() {
+        let installs: LauncherInstalls = vec![(PathBuf::from(r"D:\Battle.net\World of Warcraft"), "Battle.net")];
+        let wow = Path::new(r"D:\Battle.net\World of Warcraft\_retail_\Wow.exe");
+        assert_eq!(installed_by(&installs, wow).map(|(_, launcher)| *launcher), Some("Battle.net"));
+        // A sibling folder that merely starts with the same name is not inside it.
+        assert!(installed_by(&installs, Path::new(r"D:\Battle.net\World of Warcraft Classic\Wow.exe")).is_none());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use gpui::{
 use crate::cache::{self, AppCache, CacheFile, DeleteReport, ScanResult};
 use crate::format::{self, plural};
 use crate::library::{self, GameLibrary, Launcher};
-use crate::locate::{self, SeenExes};
+use crate::locate::{self, LauncherInstalls, SeenExes};
 use crate::steam_appinfo::{self, SteamCatalog, SteamCatalogEntry};
 use crate::native;
 use crate::processes::{self, RunningProcesses};
@@ -115,6 +115,8 @@ pub struct MainView {
     steam_catalog: SteamCatalog,
     /// Launcher name (as in `source_of`) → that launcher's own icon, where it is installed.
     launcher_icons: HashMap<&'static str, Arc<RenderImage>>,
+    /// Games installed by launchers without a shared library folder (Battle.net).
+    launcher_installs: LauncherInstalls,
     running: RunningProcesses,
     /// `None` means loading was attempted and failed; the letter tile is shown instead.
     icons: HashMap<String, Option<Arc<RenderImage>>>,
@@ -156,6 +158,7 @@ impl MainView {
             seen_exes: SeenExes::new(),
             steam_catalog: SteamCatalog::new(),
             launcher_icons: HashMap::new(),
+            launcher_installs: LauncherInstalls::new(),
             running: RunningProcesses::new(),
             icons: HashMap::new(),
             settings,
@@ -349,15 +352,17 @@ impl MainView {
             let steam_catalog = steam_appinfo::load_catalog(&library::steam_root()).unwrap_or_default();
             let seen_exes = locate::discover();
             let launcher_icons = load_launcher_icons(&seen_exes);
-            (library::discover_games(), seen_exes, steam_catalog, launcher_icons)
+            let launcher_installs = locate::launcher_installs();
+            (library::discover_games(), seen_exes, steam_catalog, launcher_icons, launcher_installs)
         });
         cx.spawn(async move |this, cx| {
-            let (games, seen_exes, steam_catalog, launcher_icons) = task.await;
+            let (games, seen_exes, steam_catalog, launcher_icons, launcher_installs) = task.await;
             this.update(cx, |this, cx| {
                 this.games = games;
                 this.seen_exes = seen_exes;
                 this.steam_catalog = steam_catalog;
                 this.launcher_icons = launcher_icons;
+                this.launcher_installs = launcher_installs;
                 this.load_missing_icons(cx);
                 cx.notify();
             })
@@ -590,6 +595,7 @@ impl MainView {
     fn is_game(&self, key: &str) -> bool {
         self.games.contains_key(key)
             || self.steam_entry(key).is_some()
+            || self.installed_by(key).is_some()
             || self.seen_exes.get(key).is_some_and(|seen| locate::game_folder_name(&seen.path).is_some())
     }
 
@@ -606,26 +612,41 @@ impl MainView {
 
     /// Where an app's name and icon come from: a short launcher name for the header badge
     /// (when there is one) and a sentence for the details.
-    fn source_of(&self, key: &str) -> (Option<&'static str>, &'static str) {
+    fn source_of(&self, key: &str) -> (Option<&'static str>, String) {
         if let Some(game) = self.games.get(key) {
-            return match game.launcher {
-                Launcher::Steam => (Some("Steam"), "Installed with Steam"),
-                Launcher::Epic => (Some("Epic Games"), "Installed with Epic Games"),
+            let launcher = match game.launcher {
+                Launcher::Steam => "Steam",
+                Launcher::Epic => "Epic Games",
             };
+            return (Some(launcher), format!("Installed with {launcher}"));
         }
         if self.steam_entry(key).is_some() {
-            return (Some("Steam"), "Steam game, no longer installed");
+            return (Some("Steam"), "Steam game, no longer installed".into());
         }
         if store_app_name(key).is_some() {
-            return (Some("Microsoft Store"), "Microsoft Store app");
+            return (Some("Microsoft Store"), "Microsoft Store app".into());
+        }
+        if let Some(launcher) = self.installed_by(key) {
+            return (Some(launcher), format!("Installed with {launcher}"));
         }
         if let Some(seen) = self.seen_exes.get(key) {
-            return (locate::launcher_name(&seen.path), "Windows launch history");
+            return (locate::launcher_name(&seen.path), "Windows launch history".into());
         }
         if matches!(self.running.get(key), Some(Some(_))) {
-            return (None, "Currently running");
+            return (None, "Currently running".into());
         }
-        (None, "Unknown")
+        (None, "Unknown".into())
+    }
+
+    /// The launcher (e.g. Battle.net) whose install folder holds the app's exe.
+    fn installed_by(&self, key: &str) -> Option<&'static str> {
+        self.launcher_install(key).map(|(_, launcher)| *launcher)
+    }
+
+    /// The launcher install (game folder, launcher) that holds the app's exe.
+    fn launcher_install(&self, key: &str) -> Option<&(PathBuf, &'static str)> {
+        let (path, _) = self.exe_location(key)?;
+        locate::installed_by(&self.launcher_installs, &path)
     }
 
     /// Steam's record for an app whose last known exe sits in a Steam library folder.

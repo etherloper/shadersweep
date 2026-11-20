@@ -41,10 +41,11 @@ pub fn discover_games() -> GameLibrary {
 
 /// Launchers whose own icon can stand in for their name: display name (as used for game
 /// sources), lowercased exe file name, and default install locations.
-pub fn launcher_exes() -> [(&'static str, &'static str, Vec<PathBuf>); 3] {
+pub fn launcher_exes() -> [(&'static str, &'static str, Vec<PathBuf>); 4] {
     let epic = r"Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe";
     [
         ("Steam", "steam.exe", vec![steam_root().join("steam.exe")]),
+        ("Battle.net", "battle.net.exe", vec![PathBuf::from(r"C:\Program Files (x86)\Battle.net\Battle.net.exe")]),
         (
             "Epic Games",
             "epicgameslauncher.exe",

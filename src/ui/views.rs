@@ -675,7 +675,13 @@ impl MainView {
         let p = p();
         let value = match self.exe_location(&app.key) {
             Some((path, exists)) => {
+                // The game's own folder: from a launcher library, a launcher install, or the
+                // exe's parent folder as a last resort.
                 let folder = locate::game_folder_name(&path)
+                    .or_else(|| {
+                        let (dir, _) = self.launcher_install(&app.key)?;
+                        dir.file_name().map(|n| n.to_string_lossy().into_owned())
+                    })
                     .or_else(|| path.parent().and_then(|dir| dir.file_name()).map(|n| n.to_string_lossy().into_owned()))
                     .unwrap_or_else(|| path.display().to_string());
                 // A missing exe opens the nearest folder that still exists.
