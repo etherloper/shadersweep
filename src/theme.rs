@@ -31,9 +31,13 @@ pub struct Palette {
     pub toast_text: u32,
     /// RGBA, drawn behind dialogs and the settings sheet.
     pub backdrop: u32,
-    /// Categorical colours for the usage bar and letter tiles.
+    /// Categorical colours for letter tiles.
     pub series: [u32; 6],
-    pub series_other: u32,
+    /// The overview's cache groups (games in use, not updated, uninstalled, other apps), in
+    /// that fixed order. Validated for colour-vision deficiency on the panel surface.
+    pub groups: [u32; 4],
+    /// Text drawn inside each group's colour.
+    pub on_groups: [u32; 4],
 }
 
 pub const DARK: Palette = Palette {
@@ -59,7 +63,8 @@ pub const DARK: Palette = Palette {
     toast_text: 0xededed,
     backdrop: 0x000000c0,
     series: [0x7cc35b, 0x5b9cf0, 0xe0a33a, 0xc678dd, 0x4fc1c1, 0xe06c75],
-    series_other: 0x3a3a40,
+    groups: [0x3987e5, 0xd95926, 0x199e70, 0xc98500],
+    on_groups: [0xffffff, 0xffffff, 0xffffff, 0xffffff],
 };
 
 pub const LIGHT: Palette = Palette {
@@ -85,7 +90,8 @@ pub const LIGHT: Palette = Palette {
     toast_text: 0x14171c,
     backdrop: 0x0f121870,
     series: [0x4c9a2a, 0x2f6fd6, 0xc98410, 0xa24fc2, 0x1f9a9a, 0xc94a55],
-    series_other: 0xc3c8ce,
+    groups: [0x2a78d6, 0xeb6834, 0x1baf7a, 0xeda100],
+    on_groups: [0xffffff, 0xffffff, 0xffffff, 0x0b0b0b],
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

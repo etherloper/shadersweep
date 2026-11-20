@@ -10,7 +10,7 @@ use gpui::{
 
 use super::components::*;
 use super::{
-    MainView, NoticeAction, NoticeKind, SMALL_CACHE_BYTES, ScanState, SortKey, UpdateState, View, percent, store_app_name,
+    CacheGroup, MainView, NoticeAction, NoticeKind, SMALL_CACHE_BYTES, ScanState, SortKey, UpdateState, View, percent, store_app_name,
 };
 use crate::assets::Icon;
 use crate::cache::AppCache;
@@ -23,7 +23,8 @@ const ROW_HEIGHT: f32 = 60.0;
 const DETAIL_WIDTH: f32 = 380.0;
 const SETTINGS_WIDTH: f32 = 400.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
-const USAGE_SEGMENTS: usize = 5;
+/// Below this share a segment is too narrow to hold its percentage label.
+const SEGMENT_LABEL_MIN_SHARE: f64 = 0.06;
 const LARGEST_LIST_LEN: usize = 10;
 const ENTRANCE: Duration = Duration::from_millis(180);
 
@@ -122,87 +123,107 @@ impl MainView {
             return empty_state(Icon::Info, "The shader cache is empty.".into()).into_any_element();
         }
         let total = scan.total_size.max(1);
-        let stale = self.stale_apps();
-        let stale_size: u64 = stale.iter().map(|app| app.total_size).sum();
-        let recognised = scan.apps.iter().filter(|app| self.games.contains_key(&app.key)).count();
-        let largest = scan.apps.first();
+        let groups = self.group_totals();
+        let days = self.settings.stale_days;
+        let share = |size: u64| size as f64 / total as f64;
 
-        let cards = div()
+        let hero = div()
             .flex()
-            .gap_3()
-            .child(stat_card(
-                Icon::Folder,
-                "Total cache",
-                format::bytes(scan.total_size),
-                format!(
-                    "{} across {}",
-                    plural(scan.file_count, "file", "files"),
-                    plural(scan.apps.len(), "app", "apps")
-                ),
-                None,
-            ))
-            .child(stat_card(
-                Icon::Info,
-                "Largest",
-                largest.map(|app| self.display_name(app)).unwrap_or_else(|| "—".into()),
-                largest
-                    .map(|app| format!("{} · {} of total", format::bytes(app.total_size), percent(app.total_size, total)))
-                    .unwrap_or_default(),
-                None,
-            ))
-            .child(stat_card(
-                Icon::Clock,
-                format!("Not updated in {}+ days", self.settings.stale_days),
-                format::bytes(stale_size),
-                plural(stale.len(), "app", "apps"),
-                (!stale.is_empty()).then(|| {
-                    button("select-stale", "Select these", ButtonStyle::Link)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let keys: Vec<String> = this.stale_apps().iter().map(|app| app.key.clone()).collect();
-                            this.marked.extend(keys);
-                            this.view = View::Stale;
-                            this.hide_small = false;
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                }),
-            ))
-            .child(stat_card(
-                Icon::Check,
-                "Recognised games",
-                recognised.to_string(),
-                "Matched to your Steam and Epic libraries".into(),
-                None,
-            ));
+            .flex_col()
+            .gap_1()
+            .child(div().text_sm().text_color(rgb(p.muted)).child("Shader cache"))
+            .child(
+                div()
+                    .text_size(px(48.0))
+                    .line_height(px(56.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format::bytes(scan.total_size)),
+            )
+            .child(div().text_sm().text_color(rgb(p.muted)).child(format!(
+                "{} from {}",
+                plural(scan.file_count, "file", "files"),
+                plural(scan.apps.len(), "app", "apps")
+            )));
 
-        let top: Vec<&AppCache> = scan.apps.iter().take(USAGE_SEGMENTS).collect();
-        let other_size = scan.total_size.saturating_sub(top.iter().map(|app| app.total_size).sum());
-        let share = |size: u64| (size as f64 / total as f64) as f32;
+        // Tall segmented bar: each group's block, its share printed inside where it fits.
         let bar = div()
             .flex()
             .gap(px(2.0))
-            .h(px(10.0))
+            .h(px(28.0))
             .w_full()
-            .children(top.iter().enumerate().map(|(ix, app)| {
-                div().h_full().rounded_sm().w(relative(share(app.total_size))).bg(rgb(p.series[ix]))
-            }))
-            .when(other_size > 0, |bar| bar.child(div().h_full().rounded_sm().flex_1().bg(rgb(p.series_other))));
-        let legend = div()
-            .flex()
-            .flex_wrap()
-            .gap_x_4()
-            .gap_y_1()
-            .children(top.iter().enumerate().map(|(ix, app)| {
-                legend_item(("legend", ix), p.series[ix], self.display_name(app), format::bytes(app.total_size))
-            }))
-            .when(other_size > 0, |legend| {
-                legend.child(legend_item(
-                    "legend-other",
-                    p.series_other,
-                    format!("Everything else ({})", plural(scan.apps.len().saturating_sub(USAGE_SEGMENTS), "app", "apps")),
-                    format::bytes(other_size),
-                ))
-            });
+            .children(groups.iter().filter(|(_, size, _)| *size > 0).map(|(group, size, _)| {
+                let ix = *group as usize;
+                let fraction = share(*size);
+                div()
+                    .h_full()
+                    .w(relative(fraction as f32))
+                    .min_w(px(4.0))
+                    .flex()
+                    .items_center()
+                    .px_2()
+                    .overflow_hidden()
+                    .rounded(px(4.0))
+                    .bg(rgb(p.groups[ix]))
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(p.on_groups[ix]))
+                    .when(fraction >= SEGMENT_LABEL_MIN_SHARE, |block| block.child(percent(*size, total)))
+            }));
+
+        let rows = div().flex().flex_col().children(groups.iter().enumerate().map(|(row, (group, size, keys))| {
+            let ix = *group as usize;
+            let (name, description) = match group {
+                CacheGroup::GamesInUse => ("Games in use".to_owned(), format!("Updated in the last {days} days")),
+                CacheGroup::Stale => (format!("Not updated in {days}+ days"), "No new shaders recently".to_owned()),
+                CacheGroup::Uninstalled => ("Uninstalled games".to_owned(), "No longer on this PC, safe to clear".to_owned()),
+                CacheGroup::OtherApps => ("Other apps".to_owned(), "Browsers, launchers, Windows and unidentified files".to_owned()),
+            };
+            let action = match group {
+                CacheGroup::Stale | CacheGroup::Uninstalled if !keys.is_empty() => {
+                    let keys = keys.clone();
+                    let group = *group;
+                    Some(
+                        button(("select-group", ix), "Select", ButtonStyle::Secondary).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.marked.extend(keys.iter().cloned());
+                                this.hide_small = false;
+                                this.view = if group == CacheGroup::Stale { View::Stale } else { View::All };
+                                cx.notify();
+                            },
+                        )),
+                    )
+                }
+                _ => None,
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .py_3()
+                .when(row > 0, |r| r.border_t_1().border_color(rgb(p.border)))
+                .child(div().size(px(10.0)).flex_none().rounded(px(3.0)).bg(rgb(p.groups[ix])))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                        .child(div().text_xs().text_color(rgb(p.muted)).truncate().child(description)),
+                )
+                .child(div().w(px(70.0)).text_right().text_color(rgb(p.muted)).child(match group {
+                    CacheGroup::GamesInUse | CacheGroup::Uninstalled => plural(keys.len(), "game", "games"),
+                    _ => plural(keys.len(), "app", "apps"),
+                }))
+                .child(
+                    div()
+                        .w(px(90.0))
+                        .text_right()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(format::bytes(*size)),
+                )
+                .child(div().w(px(76.0)).flex().justify_end().children(action))
+        }));
 
         let largest_list = div()
             .flex()
@@ -248,17 +269,15 @@ impl MainView {
                     }))
             }));
 
-        let section = |title: &'static str| {
+        let section = || {
             div()
                 .flex()
                 .flex_col()
-                .gap_3()
-                .p_4()
+                .p_5()
                 .rounded_lg()
                 .bg(rgb(p.panel))
                 .border_1()
                 .border_color(rgb(p.border))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
         };
 
         div()
@@ -269,9 +288,13 @@ impl MainView {
             .flex_col()
             .gap_4()
             .p_5()
-            .child(cards)
-            .child(section("Where the space goes").child(bar).child(legend))
-            .child(section("Largest caches").child(largest_list))
+            .child(section().gap_5().child(hero).child(bar).child(rows))
+            .child(
+                section()
+                    .gap_3()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Largest caches"))
+                    .child(largest_list),
+            )
             .into_any_element()
     }
 

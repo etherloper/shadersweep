@@ -47,7 +47,6 @@ pub enum ButtonStyle {
     Danger,
     Secondary,
     Ghost,
-    Link,
     Disabled,
 }
 
@@ -67,7 +66,6 @@ pub fn icon_button(
         ButtonStyle::Danger => (p.on_danger, 2.0),
         ButtonStyle::Secondary => (p.text, 2.0),
         ButtonStyle::Ghost | ButtonStyle::Disabled => (p.muted, 1.5),
-        ButtonStyle::Link => (p.accent, 0.0),
     };
     let base = div()
         .id(id)
@@ -101,7 +99,6 @@ pub fn icon_button(
         ButtonStyle::Ghost => base
             .cursor_pointer()
             .hover(|b| b.bg(rgb(p.hover)).text_color(rgb(p.text))),
-        ButtonStyle::Link => base.text_xs().cursor_pointer().hover(|b| b.underline()),
         // Clicks are still delivered; callers ignore them while busy.
         ButtonStyle::Disabled => base.bg(rgb(p.raised)),
     }
@@ -267,63 +264,6 @@ pub fn stat(label: &'static str, value: String) -> Div {
         .bg(rgb(p.raised))
         .child(div().text_xs().text_color(rgb(p.muted)).child(label))
         .child(div().font_weight(FontWeight::SEMIBOLD).child(value))
-}
-
-pub fn stat_card(
-    glyph: Icon,
-    label: impl Into<SharedString>,
-    value: String,
-    detail: String,
-    action: Option<AnyElement>,
-) -> Div {
-    let p = p();
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .flex_1()
-        .min_w_0()
-        .px_4()
-        .py_3()
-        .rounded_lg()
-        .bg(rgb(p.raised))
-        .border_1()
-        .border_color(rgb(p.border))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_xs()
-                .text_color(rgb(p.muted))
-                .child(icon(glyph, 14.0, p.muted))
-                .child(label.into()),
-        )
-        .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).truncate().child(value))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_xs()
-                .text_color(rgb(p.muted))
-                .child(div().truncate().child(detail))
-                .children(action),
-        )
-}
-
-pub fn legend_item(id: impl Into<ElementId>, tint: u32, name: String, size: String) -> Stateful<Div> {
-    let p = p();
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_2()
-        .text_xs()
-        .text_color(rgb(p.muted))
-        .child(div().size(px(8.0)).rounded_sm().bg(rgb(tint)))
-        .child(name)
-        .child(div().text_color(rgb(p.text)).font_weight(FontWeight::MEDIUM).child(size))
 }
 
 /// Section heading used in the settings sheet.

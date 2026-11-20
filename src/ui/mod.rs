@@ -84,6 +84,19 @@ impl SortKey {
     }
 }
 
+/// The overview's split of the cache. The order is fixed and matches `Palette::groups`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum CacheGroup {
+    GamesInUse = 0,
+    Stale = 1,
+    Uninstalled = 2,
+    OtherApps = 3,
+}
+
+impl CacheGroup {
+    const ALL: [CacheGroup; 4] = [CacheGroup::GamesInUse, CacheGroup::Stale, CacheGroup::Uninstalled, CacheGroup::OtherApps];
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Overview,
@@ -566,6 +579,40 @@ impl MainView {
             return Some((path.clone(), true));
         }
         self.seen_exes.get(key).map(|seen| (seen.path.clone(), seen.exists))
+    }
+
+    /// Which overview group an app belongs to. Groups don't overlap; the first rule that
+    /// matches wins, so an uninstalled game that is also stale counts as uninstalled.
+    /// Only games count as uninstalled: other apps often move between versioned folders
+    /// on update (`app-1.0.9…`), leaving a stale path behind while still installed.
+    fn group_of(&self, app: &AppCache, now: SystemTime) -> CacheGroup {
+        if self.is_game(&app.key) && matches!(self.exe_location(&app.key), Some((_, false))) {
+            CacheGroup::Uninstalled
+        } else if self.is_stale(app, now) {
+            CacheGroup::Stale
+        } else if self.is_game(&app.key) {
+            CacheGroup::GamesInUse
+        } else {
+            CacheGroup::OtherApps
+        }
+    }
+
+    fn is_game(&self, key: &str) -> bool {
+        self.games.contains_key(key)
+            || self.steam_entry(key).is_some()
+            || self.seen_exes.get(key).is_some_and(|seen| locate::game_folder_name(&seen.path).is_some())
+    }
+
+    /// Total size and member keys for each group, in `CacheGroup::ALL` order.
+    fn group_totals(&self) -> [(CacheGroup, u64, Vec<String>); 4] {
+        let now = SystemTime::now();
+        let mut totals = CacheGroup::ALL.map(|group| (group, 0u64, Vec::new()));
+        for app in self.all_apps() {
+            let slot = &mut totals[self.group_of(app, now) as usize];
+            slot.1 += app.total_size;
+            slot.2.push(app.key.clone());
+        }
+        totals
     }
 
     /// Steam's record for an app whose last known exe sits in a Steam library folder.
