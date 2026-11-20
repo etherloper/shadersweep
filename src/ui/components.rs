@@ -17,25 +17,6 @@ pub fn icon(icon: Icon, size: f32, color: u32) -> Svg {
     svg().path(icon.path()).size(px(size)).flex_none().text_color(rgb(color))
 }
 
-pub fn logo() -> Div {
-    // Three bars of shrinking width: a cache being swept down.
-    let bar = |width: f32| div().h(px(3.0)).w(px(width)).rounded_full().bg(rgb(p().on_accent));
-    div()
-        .size(px(32.0))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .items_start()
-        .justify_center()
-        .pl(px(7.0))
-        .gap(px(3.0))
-        .rounded_lg()
-        .bg(rgb(p().accent))
-        .child(bar(18.0))
-        .child(bar(13.0))
-        .child(bar(8.0))
-}
-
 pub fn letter_tile(name: &str, key: &str, size: f32) -> Div {
     let letter = name
         .chars()

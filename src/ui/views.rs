@@ -37,23 +37,13 @@ impl MainView {
 
     pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = p();
-        let path = self.cache_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
         div()
             .flex()
             .items_center()
+            .justify_end()
             .gap_3()
             .px_5()
             .py_3()
-            .child(logo())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("Shadersweep"))
-                    .child(div().text_xs().text_color(rgb(p.muted)).truncate().child(path)),
-            )
             .when(self.refreshing, |header| {
                 header.child(div().text_xs().text_color(rgb(p.muted)).child("Refreshing…"))
             })
@@ -932,9 +922,15 @@ impl MainView {
                                     .text_color(rgb(p.muted))
                                     .child("Shows NVIDIA's DirectX shader cache by game and clears it one game at a time."),
                             )
-                            .children(settings_path().map(|path| {
+                            .children(self.cache_dir.as_ref().map(|dir| {
                                 div()
                                     .pt_2()
+                                    .text_xs()
+                                    .text_color(rgb(p.muted))
+                                    .child(format!("Shader cache: {}", dir.display()))
+                            }))
+                            .children(settings_path().map(|path| {
+                                div()
                                     .text_xs()
                                     .text_color(rgb(p.muted))
                                     .child(format!("Settings are saved to {}", path.display()))
@@ -1167,6 +1163,8 @@ impl MainView {
                                     div()
                                         .flex()
                                         .flex_col()
+                                        .flex_1()
+                                        .min_w_0()
                                         .gap_1()
                                         .child(
                                             div()
