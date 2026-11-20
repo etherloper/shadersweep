@@ -4,7 +4,11 @@
 
 #define AppName "Shadersweep"
 #define AppExe "shadersweep.exe"
-#define AppVersion GetStringFileInfo("..\target\release\shadersweep.exe", "ProductVersion")
+; Override with /DSourceExe=<path> to package a specific build (e.g. the released exe).
+#ifndef SourceExe
+  #define SourceExe "..\target\release\shadersweep.exe"
+#endif
+#define AppVersion GetStringFileInfo(SourceExe, "ProductVersion")
 
 [Setup]
 ; Keep this AppId unchanged across versions so upgrades replace the existing install.
@@ -37,7 +41,7 @@ RestartApplications=no
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\target\release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
