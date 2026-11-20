@@ -15,6 +15,7 @@ use super::{
 use crate::assets::Icon;
 use crate::cache::AppCache;
 use crate::format::{self, plural};
+use crate::locate;
 use crate::settings::settings_path;
 use crate::theme::{self, Palette, ThemeMode, p};
 use crate::updater;
@@ -22,6 +23,7 @@ use crate::updater;
 const ROW_HEIGHT: f32 = 60.0;
 const TOP_BAR_HEIGHT: f32 = 52.0;
 const DETAIL_WIDTH: f32 = 380.0;
+const DETAIL_LABEL_WIDTH: f32 = 92.0;
 const SETTINGS_COLUMN_WIDTH: f32 = 720.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
 /// Below this share a segment is too narrow to hold its percentage label.
@@ -470,216 +472,233 @@ impl MainView {
 
     // ---- detail panel -----------------------------------------------------------------
 
-    /// The info panel for the selected app; absent when nothing is selected.
+    /// The info panel for the selected app; absent when nothing is selected. A header, the
+    /// size as the headline, a few details, and the delete action pinned to the bottom.
     pub(super) fn render_detail(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let p = p();
         let app = self.focused.as_deref().and_then(|key| self.app(key))?;
-        let panel = div()
-            .id("detail")
-            .w(px(DETAIL_WIDTH))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .bg(rgb(p.panel))
-            .border_l_1()
-            .border_color(rgb(p.border));
-
         let now = SystemTime::now();
-        let running = self.is_running(app);
-        let locked = app.locked_count();
         let key = app.key.clone();
         let name = self.display_name(app);
         let show_key = app.is_identified() && name != app.key;
+        let (launcher, source) = self.source_of(&app.key);
         let total = self.ready_scan().map_or(1, |scan| scan.total_size.max(1));
-        let largest_file = app.files.first().map_or(1, |f| f.size.max(1));
+        let share = (app.total_size as f64 / total as f64) as f32;
         let first_file = app.files.first().map(|f| f.path.clone());
-        let explanation = if app.is_identified() {
-            "The driver rebuilds these shaders the next time the app starts, so the first launch may load slower or stutter briefly."
-        } else {
-            "These files have a format Shadersweep does not recognise, so it cannot tell which program made them. Deleting them is safe; the driver recreates what it needs."
-        };
 
-        Some(
-            panel
+        let header = div()
+            .flex()
+            .items_start()
+            .gap_3()
+            .p_5()
+            .child(self.app_icon(app, 48.0))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_4()
-                    .p_5()
-                    .border_b_1()
-                    .border_color(rgb(p.border))
+                    .gap_1()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(name))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_1p5()
+                            .when(show_key, |row| row.child(div().text_xs().text_color(rgb(p.muted)).child(app.key.clone())))
+                            .children(launcher.map(|name| badge(name, p.muted)))
+                            .when(self.is_running(app), |row| row.child(badge("Running", p.warning))),
+                    ),
+            )
+            .child(square_button("close-detail", Icon::X, 28.0, p.muted).on_click(cx.listener(|this, _, _, cx| {
+                this.focused = None;
+                cx.notify();
+            })));
+
+        let hero = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(32.0))
+                    .line_height(px(38.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format::bytes(app.total_size)),
+            )
+            .child(
+                div()
+                    .h(px(6.0))
+                    .w_full()
+                    .rounded_full()
+                    .bg(rgb(p.raised))
+                    .child(div().h_full().w(relative(share.max(0.01))).rounded_full().bg(rgb(p.accent))),
+            )
+            .child(div().text_xs().text_color(rgb(p.muted)).child(format!(
+                "{} of your shader cache · {} · updated {}",
+                percent(app.total_size, total),
+                plural(app.files.len(), "file", "files"),
+                format::age(app.last_modified, now).to_lowercase()
+            )));
+
+        let callout_text = if self.is_running(app) {
+            Some((format!("This {} is running. Close it first, or the files it has open will be skipped.", if self.is_game(&app.key) { "game" } else { "app" }), p.warning))
+        } else if app.locked_count() > 0 {
+            Some((format!("{} in use and will be skipped.", plural(app.locked_count(), "file is", "files are")), p.warning))
+        } else if self.group_of(app) == CacheGroup::Uninstalled {
+            Some(("This game is no longer installed, so its cache can't be used again.".to_owned(), p.accent))
+        } else if !app.is_identified() {
+            Some(("Shadersweep can't tell which program made these files. Deleting them is safe; the driver recreates what it needs.".to_owned(), p.muted))
+        } else {
+            None
+        };
+
+        let expanded = self.files_expanded_for.as_deref() == Some(app.key.as_str());
+        let files_row = detail_row("Cache files")
+            .child(
+                div()
+                    .id("toggle-files")
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .flex_1()
+                    .cursor_pointer()
+                    .child(plural(app.files.len(), "file", "files"))
+                    .child(div().text_xs().text_color(rgb(p.muted)).child(if expanded { "Hide" } else { "Show" }))
+                    .on_click(cx.listener({
+                        let key = key.clone();
+                        move |this, _, _, cx| {
+                            let open = this.files_expanded_for.as_deref() == Some(key.as_str());
+                            this.files_expanded_for = (!open).then(|| key.clone());
+                            cx.notify();
+                        }
+                    })),
+            );
+        let largest_file = app.files.first().map_or(1, |f| f.size.max(1));
+        let file_list = expanded.then(|| {
+            div().flex().flex_col().pl(px(DETAIL_LABEL_WIDTH)).children(app.files.iter().map(|file| {
+                let name = file.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let fraction = (file.size as f64 / largest_file as f64).clamp(0.02, 1.0) as f32;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .py_1p5()
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap_3()
-                            .child(self.app_icon(app, 48.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(name))
-                                    .when(show_key, |col| {
-                                        col.child(div().text_xs().text_color(rgb(p.muted)).truncate().child(app.key.clone()))
-                                    }),
-                            )
-                            .child(square_button("close-detail", Icon::X, 28.0, p.muted).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.focused = None;
-                                    cx.notify();
-                                },
-                            ))),
+                            .gap_2()
+                            .text_xs()
+                            .child(div().flex_1().truncate().font_family("Consolas").child(name))
+                            .when(file.locked, |row| row.child(badge("In use", p.warning)))
+                            .child(div().text_color(rgb(p.muted)).child(format::bytes(file.size))),
                     )
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_2()
-                                    .child(stat("Size", format::bytes(app.total_size)))
-                                    .child(stat("Share of cache", percent(app.total_size, total))),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_2()
-                                    .child(stat("Files", app.files.len().to_string()))
-                                    .child(stat("Last updated", format::age(app.last_modified, now))),
-                            ),
+                            .h(px(2.0))
+                            .w_full()
+                            .bg(rgb(p.raised))
+                            .child(div().h_full().w(relative(fraction)).bg(rgb(p.border_strong))),
                     )
-                    .when(running || locked > 0, |col| {
-                        let text = if running {
-                            "This app is running. Close it first, or the files it has open will be skipped.".to_owned()
-                        } else {
-                            format!("{} in use by another process and will be skipped.", plural(locked, "file is", "files are"))
-                        };
-                        col.child(callout(text, p.warning))
-                    })
-                    .child(div().text_sm().text_color(rgb(p.muted)).child(explanation))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                icon_button(
-                                    "delete-focused",
-                                    Some(Icon::Trash),
-                                    if self.deleting {
-                                        "Deleting…".to_owned()
-                                    } else {
-                                        format!("Delete {}", format::bytes(app.total_size))
-                                    },
-                                    if self.deleting { ButtonStyle::Disabled } else { ButtonStyle::Danger },
-                                )
-                                .flex_1()
-                                .on_click(cx.listener(move |this, _, _, cx| this.request_delete(vec![key.clone()], cx))),
-                            )
-                            .when_some(first_file, |row, path| {
-                                row.child(
-                                    icon_button("reveal-files", Some(Icon::Folder), "Cache files", ButtonStyle::Secondary)
-                                        .on_click(move |_, _, cx| cx.reveal_path(&path)),
-                                )
-                            }),
-                    )
-                    .when(app.is_identified(), |col| col.child(self.render_location(app))),
-            )
+            }))
+        });
+
+        let details = div()
+            .flex()
+            .flex_col()
+            .when(app.is_identified(), |rows| rows.child(self.render_location(app)))
+            .child(detail_row("Source").child(div().flex_1().min_w_0().child(source)))
+            .child(files_row)
+            .children(file_list);
+
+        let footer = div()
+            .flex()
+            .gap_2()
+            .p_4()
+            .border_t_1()
+            .border_color(rgb(p.border))
             .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .px_5()
-                    .pt_4()
-                    .pb_2()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(p.muted))
-                    .child("Cache files")
-                    .child(plural(app.files.len(), "file", "files")),
+                icon_button(
+                    "delete-focused",
+                    Some(Icon::Trash),
+                    if self.deleting { "Deleting…".to_owned() } else { format!("Delete {}", format::bytes(app.total_size)) },
+                    if self.deleting { ButtonStyle::Disabled } else { ButtonStyle::Danger },
+                )
+                .flex_1()
+                .on_click(cx.listener(move |this, _, _, cx| this.request_delete(vec![key.clone()], cx))),
             )
-            .child(
-                div()
-                    .id("file-list")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .px_5()
-                    .pb_4()
-                    .children(app.files.iter().map(|file| {
-                        let name = file.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        let fraction = (file.size as f64 / largest_file as f64).clamp(0.02, 1.0) as f32;
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .py_2()
-                            .border_b_1()
-                            .border_color(rgb(p.border))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_sm()
-                                    .child(div().flex_1().truncate().font_family("Consolas").child(name))
-                                    .when(file.locked, |row| row.child(badge("In use", p.warning)))
-                                    .child(div().text_color(rgb(p.muted)).child(format::bytes(file.size))),
-                            )
-                            .child(
-                                div()
-                                    .h(px(2.0))
-                                    .w_full()
-                                    .bg(rgb(p.raised))
-                                    .child(div().h_full().w(relative(fraction)).bg(rgb(p.border_strong))),
-                            )
-                    })),
-            ),
+            .when_some(first_file, |row, path| {
+                row.child(outlined_icon_button("reveal-files", Icon::Folder).on_click(move |_, _, cx| cx.reveal_path(&path)))
+            });
+
+        Some(
+            div()
+                .w(px(DETAIL_WIDTH))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .bg(rgb(p.panel))
+                .border_l_1()
+                .border_color(rgb(p.border))
+                .child(header)
+                .child(
+                    div()
+                        .id("detail-body")
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_5()
+                        .px_5()
+                        .pb_5()
+                        .child(hero)
+                        .children(callout_text.map(|(text, tint)| callout(text, tint)))
+                        .child(details),
+                )
+                .child(footer),
         )
     }
 
-    /// Where the app's executable is, so an unfamiliar name like `pioneergame.exe` can be
-    /// traced to the game it belongs to.
+    /// Where the game's exe lives: its folder name, the full path, and a button to open it.
+    /// This is how an unfamiliar name like `pioneergame.exe` gets traced to a game.
     fn render_location(&self, app: &AppCache) -> Div {
         let p = p();
-        let location = self.exe_location(&app.key);
-        let (path_text, note, button): (Option<String>, Option<&str>, Option<Stateful<Div>>) = match location {
-            Some((path, true)) => (
-                Some(path.display().to_string()),
-                None,
-                Some(
-                    icon_button("reveal-exe", Some(Icon::Folder), "Show game folder", ButtonStyle::Secondary)
-                        .on_click(move |_, _, cx| cx.reveal_path(&path)),
-                ),
-            ),
-            Some((path, false)) => {
-                let folder = path.ancestors().skip(1).find(|dir| dir.is_dir()).map(Path::to_path_buf);
-                (
-                    Some(path.display().to_string()),
-                    Some("No longer on disk. The game may have been uninstalled or its drive disconnected."),
-                    folder.map(|dir| {
-                        icon_button("reveal-exe", Some(Icon::Folder), "Open nearest folder", ButtonStyle::Secondary)
-                            .on_click(move |_, _, cx| cx.reveal_path(&dir))
-                    }),
-                )
+        let value = match self.exe_location(&app.key) {
+            Some((path, exists)) => {
+                let folder = locate::game_folder_name(&path)
+                    .or_else(|| path.parent().and_then(|dir| dir.file_name()).map(|n| n.to_string_lossy().into_owned()))
+                    .unwrap_or_else(|| path.display().to_string());
+                // A missing exe opens the nearest folder that still exists.
+                let target = if exists {
+                    Some(path.clone())
+                } else {
+                    path.ancestors().skip(1).find(|dir| dir.is_dir()).map(Path::to_path_buf)
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().truncate().child(folder))
+                            .children(target.map(|dir| {
+                                square_button("reveal-exe", Icon::Folder, 24.0, p.muted)
+                                    .on_click(move |_, _, cx| cx.reveal_path(&dir))
+                            })),
+                    )
+                    .child(div().text_xs().text_color(rgb(p.muted)).child(path.display().to_string()))
+                    .when(!exists, |col| col.child(div().text_xs().text_color(rgb(p.muted)).child("No longer on disk.")))
             }
-            None => (
-                None,
-                Some("Unknown. Shadersweep finds games through your Steam and Epic libraries, or once they have been run on this PC."),
-                None,
-            ),
+            None => div().flex_1().text_color(rgb(p.muted)).child("Unknown"),
         };
-        div()
-            .flex()
-            .flex_col()
-            .gap_1p5()
-            .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(p.muted)).child("Game location"))
-            .children(path_text.map(|text| div().text_xs().text_color(rgb(p.text)).font_family("Consolas").child(text)))
-            .children(note.map(|text| div().text_xs().text_color(rgb(p.muted)).child(text)))
-            .children(button.map(|b| div().flex().pt_1().child(b)))
+        detail_row("Location").child(value)
     }
 
     // ---- overlays ---------------------------------------------------------------------
@@ -1322,6 +1341,20 @@ fn app_logo(size: f32) -> Div {
         .child(bar(18.0))
         .child(bar(13.0))
         .child(bar(8.0))
+}
+
+/// A label/value row in the info panel; the caller adds the value as a child.
+fn detail_row(label: &'static str) -> Div {
+    let p = p();
+    div()
+        .flex()
+        .items_start()
+        .gap_3()
+        .py_2p5()
+        .border_t_1()
+        .border_color(rgb(p.border))
+        .text_sm()
+        .child(div().w(px(DETAIL_LABEL_WIDTH - 12.0)).flex_none().text_color(rgb(p.muted)).child(label))
 }
 
 /// A section of the Settings tab: a panel card with a title and optional explanation.

@@ -232,7 +232,10 @@ pub fn badge(label: &'static str, tint: u32) -> Div {
         .child(label)
 }
 
+/// A tinted note. Warnings and errors get an alert icon; anything else is informational.
 pub fn callout(text: String, tint: u32) -> Div {
+    let p = p();
+    let glyph = if tint == p.warning || tint == p.danger { Icon::Alert } else { Icon::Info };
     div()
         .flex()
         .items_start()
@@ -244,20 +247,25 @@ pub fn callout(text: String, tint: u32) -> Div {
         .border_1()
         .border_color(with_alpha(tint, 0.5))
         .text_sm()
-        .child(div().mt(px(2.0)).child(icon(Icon::Alert, 15.0, tint)))
+        .child(div().mt(px(2.0)).child(icon(glyph, 15.0, tint)))
         .child(div().flex_1().min_w_0().child(text))
 }
 
-pub fn stat(label: &'static str, value: String) -> Div {
+/// An icon-only button with the secondary (outlined) look, sized to sit beside a button.
+pub fn outlined_icon_button(id: impl Into<ElementId>, glyph: Icon) -> Stateful<Div> {
     let p = p();
     div()
+        .id(id)
+        .size(px(36.0))
+        .flex_none()
         .flex()
-        .flex_col()
-        .flex_1()
-        .px_3()
-        .py_2()
+        .items_center()
+        .justify_center()
         .rounded_md()
         .bg(rgb(p.raised))
-        .child(div().text_xs().text_color(rgb(p.muted)).child(label))
-        .child(div().font_weight(FontWeight::SEMIBOLD).child(value))
+        .border_1()
+        .border_color(rgb(p.border_strong))
+        .cursor_pointer()
+        .hover(|b| b.bg(rgb(p.hover)))
+        .child(icon(glyph, 16.0, p.text))
 }

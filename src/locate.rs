@@ -113,6 +113,21 @@ pub fn game_folder_name(path: &Path) -> Option<String> {
         .or_else(|| after(&["gog games"]))
 }
 
+/// The launcher a path belongs to, judged by its library folder.
+pub fn launcher_name(path: &Path) -> Option<&'static str> {
+    let lower = path.to_string_lossy().to_lowercase();
+    [
+        (r"\steamapps\", "Steam"),
+        (r"\epic games\", "Epic Games"),
+        (r"\xboxgames\", "Xbox"),
+        (r"\gog galaxy\", "GOG"),
+        (r"\gog games\", "GOG"),
+    ]
+    .into_iter()
+    .find(|(marker, _)| lower.contains(marker))
+    .map(|(_, name)| name)
+}
+
 /// Value names (and string data, when asked) under an HKCU key. Missing keys yield nothing.
 fn read_values(subkey: &str, want_strings: bool) -> Vec<(String, Option<String>)> {
     let wide: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
@@ -176,6 +191,14 @@ mod tests {
         assert_eq!(name(r"C:\Program Files (x86)\GOG Galaxy\Games\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe").as_deref(), Some("Cyberpunk 2077"));
         assert_eq!(name(r"C:\Tools\vidi\vidi.exe"), None);
         assert_eq!(name(r"C:\Program Files\Epic Games\launcher.exe"), None);
+    }
+
+    #[test]
+    fn recognises_launcher_folders() {
+        let launcher = |p: &str| launcher_name(Path::new(p));
+        assert_eq!(launcher(r"D:\SteamLibrary\steamapps\common\Arc Raiders\PioneerGame.exe"), Some("Steam"));
+        assert_eq!(launcher(r"C:\XboxGames\Starfield\Content\Starfield.exe"), Some("Xbox"));
+        assert_eq!(launcher(r"C:\Tools\vidi\vidi.exe"), None);
     }
 
     #[test]

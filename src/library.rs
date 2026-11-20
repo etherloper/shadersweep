@@ -11,20 +11,29 @@ const EXE_SEARCH_DEPTH: usize = 4;
 const DEFAULT_STEAM_DIR: &str = r"C:\Program Files (x86)\Steam";
 const EPIC_MANIFEST_DIR: &str = r"C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launcher {
+    Steam,
+    Epic,
+}
+
 #[derive(Clone, Debug)]
 pub struct GameInfo {
     pub title: String,
     pub exe_path: PathBuf,
+    pub launcher: Launcher,
 }
 
 /// Lowercased exe file name → installed game.
 pub type GameLibrary = HashMap<String, GameInfo>;
 
 pub fn discover_games() -> GameLibrary {
+    let steam = steam_games().into_iter().map(|(title, dir)| (title, dir, Launcher::Steam));
+    let epic = epic_games().into_iter().map(|(title, dir)| (title, dir, Launcher::Epic));
     let mut games = GameLibrary::new();
-    for (title, install_dir) in steam_games().into_iter().chain(epic_games()) {
+    for (title, install_dir, launcher) in steam.chain(epic) {
         for (exe, exe_path) in find_exes(&install_dir, EXE_SEARCH_DEPTH) {
-            games.entry(exe).or_insert_with(|| GameInfo { title: title.clone(), exe_path });
+            games.entry(exe).or_insert_with(|| GameInfo { title: title.clone(), exe_path, launcher });
         }
     }
     games

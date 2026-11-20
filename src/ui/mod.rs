@@ -14,7 +14,7 @@ use gpui::{
 
 use crate::cache::{self, AppCache, CacheFile, DeleteReport, ScanResult};
 use crate::format::{self, plural};
-use crate::library::{self, GameLibrary};
+use crate::library::{self, GameLibrary, Launcher};
 use crate::locate::{self, SeenExes};
 use crate::steam_appinfo::{self, SteamCatalog, SteamCatalogEntry};
 use crate::native;
@@ -122,6 +122,8 @@ pub struct MainView {
     /// Theme last pushed to the native title bar, to avoid redundant DWM calls.
     title_bar_dark: Option<bool>,
     focused: Option<String>,
+    /// The app whose cache-file list is expanded in the info panel.
+    files_expanded_for: Option<String>,
     marked: BTreeSet<String>,
     view: View,
     sort: SortKey,
@@ -157,6 +159,7 @@ impl MainView {
             previous_view: View::All,
             title_bar_dark: None,
             focused: None,
+            files_expanded_for: None,
             marked: BTreeSet::new(),
             view: View::All,
             sort: SortKey::Size,
@@ -593,6 +596,30 @@ impl MainView {
             slot.2.push(app.key.clone());
         }
         totals
+    }
+
+    /// Where an app's name and icon come from: a short launcher name for the header badge
+    /// (when there is one) and a sentence for the details.
+    fn source_of(&self, key: &str) -> (Option<&'static str>, &'static str) {
+        if let Some(game) = self.games.get(key) {
+            return match game.launcher {
+                Launcher::Steam => (Some("Steam"), "Installed with Steam"),
+                Launcher::Epic => (Some("Epic Games"), "Installed with Epic Games"),
+            };
+        }
+        if self.steam_entry(key).is_some() {
+            return (Some("Steam"), "Steam game, no longer installed");
+        }
+        if store_app_name(key).is_some() {
+            return (Some("Microsoft Store"), "Microsoft Store app");
+        }
+        if let Some(seen) = self.seen_exes.get(key) {
+            return (locate::launcher_name(&seen.path), "Windows launch history");
+        }
+        if matches!(self.running.get(key), Some(Some(_))) {
+            return (None, "Currently running");
+        }
+        (None, "Unknown")
     }
 
     /// Steam's record for an app whose last known exe sits in a Steam library folder.
