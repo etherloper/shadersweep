@@ -312,9 +312,7 @@ impl MainView {
                 .rounded_full()
                 .cursor_pointer()
                 .bg(rgb(p.raised))
-                .border_1()
-                .border_color(rgb(p.border))
-                .hover(|button| button.border_color(rgb(p.border_strong)).bg(rgb(p.hover)))
+                .hover(|button| button.bg(rgb(p.hover)))
                 .child(icon(Icon::Search, 15.0, p.muted))
                 .on_click(focus_field)
                 .into_any_element();
