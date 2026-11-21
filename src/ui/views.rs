@@ -29,6 +29,7 @@ const TOP_BAR_HEIGHT: f32 = 52.0;
 const DETAIL_WIDTH: f32 = 380.0;
 const DETAIL_LABEL_WIDTH: f32 = 92.0;
 const SEARCH_WIDTH: f32 = 260.0;
+const SIZE_COLUMN_WIDTH: f32 = 164.0;
 const SCROLLBAR_WIDTH: f32 = 12.0;
 const SETTINGS_COLUMN_WIDTH: f32 = 720.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
@@ -63,12 +64,11 @@ impl MainView {
 
     pub(super) fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = p();
-        let shown = self.visible_apps().len();
         let list_view = self.view == View::All;
         let update_waiting = matches!(self.update, UpdateState::Available(_));
         let search = if list_view { Some(self.render_search(cx)) } else { None };
-        let view_tab = |id: &'static str, glyph: Icon, label: &'static str, count: Option<usize>, view: View| {
-            tab(id, glyph, label, count, self.view == view).on_click(cx.listener(move |this, _, _, cx| {
+        let view_tab = |id: &'static str, glyph: Icon, label: &'static str, view: View| {
+            tab(id, glyph, label, self.view == view).on_click(cx.listener(move |this, _, _, cx| {
                 this.show_view(view, cx);
             }))
         };
@@ -86,23 +86,15 @@ impl MainView {
                     .flex()
                     .h_full()
                     .gap_1()
-                    .child(view_tab("view-overview", Icon::Dashboard, "Overview", None, View::Overview))
-                    .child(view_tab("view-all", Icon::List, "All apps", Some(self.visible_apps().len()), View::All)),
+                    .child(view_tab("view-overview", Icon::Dashboard, "Overview", View::Overview))
+                    .child(view_tab("view-all", Icon::List, "All apps", View::All)),
             )
             .children(search)
             .child(div().flex_1())
             .when(self.refreshing, |bar| bar.child(div().text_xs().text_color(rgb(p.muted)).child("Refreshing…")))
-            .when(list_view && self.ready_scan().is_some(), |bar| {
-                bar.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(p.muted))
-                        .child(format!("Showing {} of {}", shown, self.all_apps().len())),
-                )
-            })
             .child(
                 div().flex().h_full().child(
-                    view_tab("view-settings", Icon::Settings, "Settings", None, View::Settings)
+                    view_tab("view-settings", Icon::Settings, "Settings", View::Settings)
                         // A waiting update is announced on the tab itself.
                         .when(update_waiting, |t| t.child(div().size(px(7.0)).rounded_full().bg(rgb(p.accent)))),
                 ),
@@ -143,10 +135,10 @@ impl MainView {
         // The legend doubles as the group summary.
         let legend = div().flex().gap_8().children(self.group_totals().into_iter().map(|(group, size, keys)| {
             let ix = group as usize;
-            let (name, members) = match group {
-                CacheGroup::InstalledGames => ("Installed games", plural(keys.len(), "game", "games")),
-                CacheGroup::Uninstalled => ("Uninstalled games", plural(keys.len(), "game", "games")),
-                CacheGroup::OtherApps => ("Other apps", plural(keys.len(), "app", "apps")),
+            let name = group.name();
+            let members = match group {
+                CacheGroup::OtherApps => plural(keys.len(), "app", "apps"),
+                _ => plural(keys.len(), "game", "games"),
             };
             // Only uninstalled games get a shortcut: their caches can't be used again.
             let select = (group == CacheGroup::Uninstalled && !keys.is_empty()).then(|| {
@@ -161,7 +153,7 @@ impl MainView {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.marked.extend(keys.iter().cloned());
                         this.view = View::All;
-                        cx.notify();
+                        this.set_group_filter(Some(CacheGroup::Uninstalled), cx);
                     }))
             });
             div()
@@ -321,6 +313,7 @@ impl MainView {
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.view = View::All;
+                this.group_filter = None;
                 this.focus_app(&key, cx);
             }))
     }
@@ -354,7 +347,7 @@ impl MainView {
             })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.view = View::All;
-                cx.notify();
+                this.set_group_filter(None, cx);
             }))
     }
 
@@ -495,17 +488,25 @@ impl MainView {
 
     pub(super) fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let visible_count = self.visible_apps().len();
+        let search = self.search.trim();
+        let group = self.group_filter.map(|group| group.name().to_lowercase());
         let message = match &self.scan {
-            ScanState::Scanning => Some("Scanning the shader cache…".to_owned()),
-            ScanState::Failed(err) => Some(err.clone()),
-            ScanState::Ready(scan) if scan.apps.is_empty() => Some("The shader cache is empty.".into()),
-            ScanState::Ready(_) if visible_count == 0 && !self.search.trim().is_empty() => {
-                Some(format!("No apps match \u{201c}{}\u{201d}.", self.search.trim()))
+            ScanState::Scanning => {
+                return empty_state(Icon::Info, "Scanning the shader cache…".into()).into_any_element();
             }
-            ScanState::Ready(_) if visible_count == 0 => {
+            ScanState::Failed(err) => return empty_state(Icon::Alert, err.clone()).into_any_element(),
+            ScanState::Ready(scan) if scan.apps.is_empty() => {
+                return empty_state(Icon::Info, "The shader cache is empty.".into()).into_any_element();
+            }
+            _ if visible_count > 0 => None,
+            _ if !search.is_empty() => Some(format!(
+                "No {} match \u{201c}{search}\u{201d}.",
+                group.as_deref().unwrap_or("apps")
+            )),
+            _ if self.matching_apps().is_empty() => {
                 Some("Nothing over 1 MB is cached. Turn off \"Hide caches under 1 MB\" in Settings to see everything.".into())
             }
-            ScanState::Ready(_) => None,
+            _ => Some(format!("No {} to show.", group.as_deref().unwrap_or("apps"))),
         };
 
         let body = match message {
@@ -544,7 +545,76 @@ impl MainView {
                 .into_any_element(),
         };
 
-        div().flex().flex_col().flex_1().min_w_0().child(body).into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .child(self.render_group_filter(cx))
+            .child(body)
+            .into_any_element()
+    }
+
+    /// Chips that narrow the list to one overview group, with how many apps each holds.
+    fn render_group_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = p();
+        let matching = self.matching_apps();
+        let mut counts = [0usize; 3];
+        for app in &matching {
+            counts[self.group_of(app) as usize] += 1;
+        }
+        let chip = |id: &'static str, dot: Option<u32>, label: &'static str, count: usize, filter: Option<CacheGroup>| {
+            let active = self.group_filter == filter;
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_2()
+                .h(px(28.0))
+                .px_2p5()
+                .rounded_md()
+                .border_1()
+                .cursor_pointer()
+                .when(active, |chip| chip.bg(rgb(p.raised)).border_color(rgb(p.border_strong)).text_color(rgb(p.text)))
+                .when(!active, |chip| {
+                    chip.border_color(rgba(0x00000000))
+                        .text_color(rgb(p.muted))
+                        .hover(|chip| chip.bg(rgb(p.hover)).text_color(rgb(p.text)))
+                })
+                .children(dot.map(|tint| div().size(px(8.0)).rounded(px(2.0)).bg(rgb(tint))))
+                .child(label)
+                .child(div().text_color(rgb(p.muted)).child(count.to_string()))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_group_filter(filter, cx)))
+        };
+
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .pl(px(10.0))
+            .pr_3()
+            .py_2()
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .border_b_1()
+            .border_color(rgb(p.border))
+            .child(chip("filter-all", None, "All", matching.len(), None))
+            .children(CacheGroup::ALL.map(|group| {
+                let id = match group {
+                    CacheGroup::InstalledGames => "filter-installed",
+                    CacheGroup::Uninstalled => "filter-uninstalled",
+                    CacheGroup::OtherApps => "filter-other",
+                };
+                chip(id, Some(p.groups[group as usize]), group.name(), counts[group as usize], Some(group))
+            }))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_color(rgb(p.muted))
+                    .font_weight(FontWeight::NORMAL)
+                    .child(format!("Showing {} of {}", self.visible_apps().len(), self.all_apps().len())),
+            )
     }
 
     fn render_column_headers(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -595,7 +665,7 @@ impl MainView {
             .child(div().flex_1().child(header("sort-name", "App", SortKey::Name)))
             .child(div().w(px(120.0)).child(header("sort-updated", "Last updated", SortKey::Updated)))
             .child(div().w(px(48.0)).flex().justify_end().child(header("sort-files", "Files", SortKey::Files)))
-            .child(div().w(px(84.0)).flex().justify_end().child(header("sort-size", "Size", SortKey::Size)))
+            .child(div().w(px(SIZE_COLUMN_WIDTH)).flex().justify_end().child(header("sort-size", "Size", SortKey::Size)))
             .child(div().w(px(28.0)))
     }
 
@@ -614,7 +684,8 @@ impl MainView {
         let marked = self.marked.contains(&app.key);
         let name = self.display_name(app);
         let show_key = app.is_identified() && name != app.key;
-        let fraction = (app.total_size as f64 / largest as f64).clamp(0.01, 1.0) as f32;
+        let fraction = (app.total_size as f64 / largest as f64).clamp(0.02, 1.0) as f32;
+        let tint = p.groups[self.group_of(app) as usize];
 
         div()
             .id(("app-row", ix))
@@ -656,7 +727,7 @@ impl MainView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
+                    .gap(px(2.0))
                     .flex_1()
                     .min_w_0()
                     .child(
@@ -666,20 +737,12 @@ impl MainView {
                             .gap_2()
                             .min_w_0()
                             .child(div().truncate().font_weight(FontWeight::MEDIUM).child(name))
-                            .when(show_key, |line| {
-                                line.child(div().text_xs().text_color(rgb(p.muted)).truncate().child(app.key.clone()))
-                            })
                             .when(store_app_name(&app.key).is_some(), |line| line.child(badge("Store app", p.muted)))
                             .when(self.is_running(app), |line| line.child(badge("Running", p.warning))),
                     )
-                    .child(
-                        div()
-                            .h(px(4.0))
-                            .w_full()
-                            .rounded_full()
-                            .bg(rgb(p.raised))
-                            .child(div().h_full().w(relative(fraction)).rounded_full().bg(rgb(p.accent))),
-                    ),
+                    .when(show_key, |block| {
+                        block.child(div().text_xs().text_color(rgb(p.muted)).truncate().child(app.key.clone()))
+                    }),
             )
             .child(
                 div()
@@ -691,12 +754,29 @@ impl MainView {
                     .child(format::age(app.last_modified, now)),
             )
             .child(div().w(px(48.0)).text_right().text_color(rgb(p.muted)).child(app.files.len().to_string()))
+            // The bar is relative to the largest app in the list and tinted by its overview group.
             .child(
                 div()
-                    .w(px(84.0))
-                    .text_right()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(format::bytes(app.total_size)),
+                    .w(px(SIZE_COLUMN_WIDTH))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_3()
+                    .child(
+                        div()
+                            .w(px(56.0))
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(rgb(p.border))
+                            .child(div().h_full().w(relative(fraction)).rounded_full().bg(rgb(tint))),
+                    )
+                    .child(
+                        div()
+                            .w(px(72.0))
+                            .text_right()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format::bytes(app.total_size)),
+                    ),
             )
             .child(
                 square_button(("row-delete", ix), Icon::Trash, 28.0, p.danger)

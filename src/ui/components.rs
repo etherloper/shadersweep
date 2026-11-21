@@ -174,9 +174,9 @@ pub fn switch(on: bool) -> Div {
         )
 }
 
-/// A top-bar tab: icon, label and optional count, underlined when active. Fills the bar's
-/// height so the underline sits on the bar's bottom edge.
-pub fn tab(id: impl Into<ElementId>, glyph: Icon, label: &'static str, count: Option<usize>, active: bool) -> Stateful<Div> {
+/// A top-bar tab: icon and label, underlined when active. Fills the bar's height so the
+/// underline sits on the bar's bottom edge.
+pub fn tab(id: impl Into<ElementId>, glyph: Icon, label: &'static str, active: bool) -> Stateful<Div> {
     let p = p();
     let ink = if active { p.text } else { p.muted };
     div()
@@ -194,19 +194,6 @@ pub fn tab(id: impl Into<ElementId>, glyph: Icon, label: &'static str, count: Op
         .when(!active, |t| t.hover(|t| t.text_color(rgb(p.text))))
         .child(icon(glyph, 16.0, ink))
         .child(label)
-        .children(count.map(|n| {
-            div()
-                .min_w(px(20.0))
-                .px_1p5()
-                .flex()
-                .justify_center()
-                .rounded_full()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .when(active, |b| b.bg(rgb(p.switch_on)).text_color(rgb(p.switch_knob_on)))
-                .when(!active, |b| b.bg(rgb(p.raised)).border_1().border_color(rgb(p.border)).text_color(rgb(p.muted)))
-                .child(n.to_string())
-        }))
         .child(
             div()
                 .absolute()

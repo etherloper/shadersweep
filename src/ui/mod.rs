@@ -131,6 +131,14 @@ enum CacheGroup {
 
 impl CacheGroup {
     const ALL: [CacheGroup; 3] = [CacheGroup::InstalledGames, CacheGroup::Uninstalled, CacheGroup::OtherApps];
+
+    fn name(self) -> &'static str {
+        match self {
+            CacheGroup::InstalledGames => "Installed games",
+            CacheGroup::Uninstalled => "Uninstalled games",
+            CacheGroup::OtherApps => "Other apps",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -186,6 +194,8 @@ pub struct MainView {
     /// Text in the All apps search field, matched against names and exe names.
     search: String,
     search_focused: bool,
+    /// The All apps list shows only this group; `None` shows every app.
+    group_filter: Option<CacheGroup>,
 }
 
 impl MainView {
@@ -229,6 +239,7 @@ impl MainView {
             scrollbar_drag: None,
             search: String::new(),
             search_focused: false,
+            group_filter: None,
         };
         if let Some(problem) = settings_problem {
             view.show_notice(NoticeKind::Warning, problem, cx);
@@ -588,16 +599,24 @@ impl MainView {
         self.ready_scan().map_or(&[], |scan| scan.apps.as_slice())
     }
 
-    fn visible_apps(&self) -> Vec<&AppCache> {
+    /// Apps that pass the size setting and the search, before the group filter.
+    fn matching_apps(&self) -> Vec<&AppCache> {
         let query = self.search.trim().to_lowercase();
-        let mut apps: Vec<&AppCache> = self
-            .all_apps()
+        self.all_apps()
             .iter()
             .filter(|app| !self.settings.hide_small || app.total_size >= SMALL_CACHE_BYTES)
             .filter(|app| {
                 query.is_empty() || app.key.contains(&query) || self.display_name(app).to_lowercase().contains(&query)
             })
-            .collect();
+            .collect()
+    }
+
+    /// The All apps list: matching apps in the chosen group, sorted.
+    fn visible_apps(&self) -> Vec<&AppCache> {
+        let mut apps = self.matching_apps();
+        if let Some(group) = self.group_filter {
+            apps.retain(|app| self.group_of(app) == group);
+        }
         apps.sort_by(|a, b| {
             let order = match self.sort {
                 SortKey::Name => self
@@ -761,6 +780,12 @@ impl MainView {
         } else {
             self.marked.extend(visible);
         }
+    }
+
+    fn set_group_filter(&mut self, group: Option<CacheGroup>, cx: &mut Context<Self>) {
+        self.group_filter = group;
+        self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
     }
 
     fn set_sort(&mut self, key: SortKey) {
