@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, Div, FontWeight, MouseButton, MouseDownEvent, ScrollHandle, SharedString,
+    Animation, AnimationExt, AnyElement, BoxShadow, Context, Div, FontWeight, MouseButton, MouseDownEvent, ScrollHandle,
+    SharedString,
     Stateful, div,
     ease_out_quint, img, point, prelude::*, px, relative, rgb, rgba, uniform_list,
 };
@@ -299,22 +300,34 @@ impl MainView {
                 Animation::new(Duration::from_millis(1000)).repeat(),
                 |caret, delta| caret.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
             );
-        let placeholder = div().text_color(rgb(p.muted)).child("Search apps");
+        let placeholder = div().text_color(rgb(p.muted)).child("Search apps…");
+        let empty = self.search.is_empty();
         div()
             .id("search")
             .flex()
             .items_center()
             .gap_2()
             .w(px(SEARCH_WIDTH))
-            .h(px(32.0))
-            .pl_2p5()
-            .pr_1()
-            .rounded_md()
-            .bg(rgb(p.bg))
+            .h(px(34.0))
+            .pl_3()
+            .pr_1p5()
+            .rounded_full()
+            .bg(rgb(if focused { p.panel } else { p.raised }))
             .border_1()
-            .border_color(rgb(if focused { p.focus } else { p.border_strong }))
             .cursor_text()
-            .child(icon(Icon::Search, 15.0, p.muted))
+            .when(focused, |field| {
+                // A soft ring around the field while it has focus.
+                field.border_color(rgb(p.focus)).shadow(vec![BoxShadow {
+                    color: with_alpha(p.focus, 0.25),
+                    offset: point(px(0.0), px(0.0)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(3.0),
+                }])
+            })
+            .when(!focused, |field| {
+                field.border_color(rgb(p.border)).hover(|field| field.border_color(rgb(p.border_strong)))
+            })
+            .child(icon(Icon::Search, 15.0, if focused { p.text } else { p.muted }))
             .child(
                 div()
                     .flex()
@@ -324,16 +337,28 @@ impl MainView {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_sm()
-                    .when(!self.search.is_empty(), |text| text.child(self.search.clone()))
+                    .when(!empty, |text| text.child(self.search.clone()))
                     .when(focused, |text| text.child(caret))
-                    .when(self.search.is_empty(), |text| text.child(placeholder)),
+                    .when(empty, |text| text.child(placeholder)),
             )
-            .when(!self.search.is_empty(), |field| {
-                field.child(square_button("clear-search", Icon::X, 24.0, p.muted).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.set_search(String::new(), cx);
-                    },
-                )))
+            // The shortcut hint while idle; a clear button once there is text.
+            .when(empty && !focused, |field| field.child(kbd("Ctrl F")))
+            .when(!empty, |field| {
+                field.child(
+                    div()
+                        .id("clear-search")
+                        .size(px(22.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .cursor_pointer()
+                        .bg(rgb(p.hover))
+                        .hover(|b| b.bg(rgb(p.border_strong)))
+                        .child(icon(Icon::X, 12.0, p.text))
+                        .on_click(cx.listener(|this, _, _, cx| this.set_search(String::new(), cx))),
+                )
             })
             // A click (down and up on the field) focuses it; the window's mouse-down handler
             // has already cleared focus by then, so a click inside simply keeps it.
