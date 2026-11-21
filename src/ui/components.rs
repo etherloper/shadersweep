@@ -215,7 +215,7 @@ pub fn tab(id: impl Into<ElementId>, glyph: Icon, label: &'static str, count: Op
                 .right(px(8.0))
                 .h(px(2.0))
                 .rounded_full()
-                .when(active, |line| line.bg(rgb(p.text))),
+                .when(active, |line| line.bg(rgb(p.accent))),
         )
 }
 

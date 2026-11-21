@@ -325,14 +325,15 @@ impl MainView {
                 Animation::new(Duration::from_millis(1000)).repeat(),
                 |caret, delta| caret.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
             );
-        // Borderless: only an underline, in the accent colour while focused.
+        // Borderless: only an underline, in the accent colour while focused. It fills the
+        // bar's height so the line sits level with the active tab's.
         div()
             .id("search")
             .flex()
             .flex_none()
             .items_center()
             .gap_2()
-            .h(px(SEARCH_HEIGHT))
+            .h_full()
             .px_1()
             .overflow_hidden()
             .border_b_2()
