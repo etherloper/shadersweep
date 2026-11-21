@@ -35,8 +35,6 @@ pub struct Palette {
     /// The overview's cache groups (installed games, uninstalled games, other apps), in
     /// that fixed order. Validated for colour-vision deficiency on the panel surface.
     pub groups: [u32; 3],
-    /// Text drawn inside each group's colour.
-    pub on_groups: [u32; 3],
 }
 
 pub const DARK: Palette = Palette {
@@ -62,7 +60,6 @@ pub const DARK: Palette = Palette {
     backdrop: 0x000000c0,
     series: [0x7cc35b, 0x5b9cf0, 0xe0a33a, 0xc678dd, 0x4fc1c1, 0xe06c75],
     groups: [0x3987e5, 0xd95926, 0x199e70],
-    on_groups: [0xffffff, 0xffffff, 0xffffff],
 };
 
 pub const LIGHT: Palette = Palette {
@@ -88,7 +85,6 @@ pub const LIGHT: Palette = Palette {
     backdrop: 0x0f121870,
     series: [0x4c9a2a, 0x2f6fd6, 0xc98410, 0xa24fc2, 0x1f9a9a, 0xc94a55],
     groups: [0x2a78d6, 0xeb6834, 0x1baf7a],
-    on_groups: [0xffffff, 0xffffff, 0xffffff],
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

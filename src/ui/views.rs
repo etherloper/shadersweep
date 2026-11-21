@@ -6,11 +6,12 @@ use std::time::{Duration, SystemTime};
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, Div, FontWeight, MouseButton, MouseDownEvent, ScrollHandle,
     SharedString,
-    Stateful, div,
+    Stateful, Window, div,
     ease_out_quint, img, point, prelude::*, px, relative, rgb, rgba, uniform_list,
 };
 
 use super::components::*;
+use super::treemap;
 use super::{
     CacheGroup, MainView, NoticeAction, NoticeKind, ScanState, ScrollMetrics, ScrollbarDrag, SortKey, UpdateState, View,
     percent, store_app_name,
@@ -31,9 +32,15 @@ const SEARCH_WIDTH: f32 = 260.0;
 const SCROLLBAR_WIDTH: f32 = 12.0;
 const SETTINGS_COLUMN_WIDTH: f32 = 720.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
-/// Below this share a segment is too narrow to hold its percentage label.
-const SEGMENT_LABEL_MIN_SHARE: f64 = 0.06;
-const LARGEST_LIST_LEN: usize = 10;
+const OVERVIEW_PADDING: f32 = 20.0;
+const OVERVIEW_GAP: f32 = 20.0;
+const OVERVIEW_HEADER_HEIGHT: f32 = 92.0;
+const TREEMAP_MIN_HEIGHT: f32 = 320.0;
+/// Apps with at least this share of the cache get a tile each (up to `TREEMAP_MAX_TILES`);
+/// the rest share one.
+const TREEMAP_MIN_SHARE: f64 = 0.005;
+const TREEMAP_MAX_TILES: usize = 24;
+const TREEMAP_GAP: f32 = 4.0;
 const ENTRANCE: Duration = Duration::from_millis(180);
 
 impl MainView {
@@ -104,7 +111,7 @@ impl MainView {
 
     // ---- overview tab -----------------------------------------------------------------
 
-    pub(super) fn render_overview(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_overview(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let p = p();
         let scan = match &self.scan {
             ScanState::Ready(scan) => scan,
@@ -114,9 +121,6 @@ impl MainView {
         if scan.apps.is_empty() {
             return empty_state(Icon::Info, "The shader cache is empty.".into()).into_any_element();
         }
-        let total = scan.total_size.max(1);
-        let groups = self.group_totals();
-        let share = |size: u64| size as f64 / total as f64;
 
         let hero = div()
             .flex()
@@ -125,8 +129,8 @@ impl MainView {
             .child(div().text_sm().text_color(rgb(p.muted)).child("Shader cache"))
             .child(
                 div()
-                    .text_size(px(48.0))
-                    .line_height(px(56.0))
+                    .text_size(px(40.0))
+                    .line_height(px(46.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(format::bytes(scan.total_size)),
             )
@@ -136,131 +140,103 @@ impl MainView {
                 plural(scan.apps.len(), "app", "apps")
             )));
 
-        // Tall segmented bar: each group's block, its share printed inside where it fits.
-        let bar = div()
-            .flex()
-            .gap(px(2.0))
-            .h(px(28.0))
-            .w_full()
-            .children(groups.iter().filter(|(_, size, _)| *size > 0).map(|(group, size, _)| {
-                let ix = *group as usize;
-                let fraction = share(*size);
-                div()
-                    .h_full()
-                    .w(relative(fraction as f32))
-                    .min_w(px(4.0))
-                    .flex()
-                    .items_center()
-                    .px_2()
-                    .overflow_hidden()
-                    .rounded(px(4.0))
-                    .bg(rgb(p.groups[ix]))
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(p.on_groups[ix]))
-                    .when(fraction >= SEGMENT_LABEL_MIN_SHARE, |block| block.child(percent(*size, total)))
-            }));
-
-        let rows = div().flex().flex_col().children(groups.iter().enumerate().map(|(row, (group, size, keys))| {
-            let ix = *group as usize;
-            let (name, description) = match group {
-                CacheGroup::InstalledGames => ("Installed games", "Games still on this PC"),
-                CacheGroup::Uninstalled => ("Uninstalled games", "No longer on this PC, safe to clear"),
-                CacheGroup::OtherApps => ("Other apps", "Browsers, launchers, Windows and unidentified files"),
+        // The legend doubles as the group summary.
+        let legend = div().flex().gap_8().children(self.group_totals().into_iter().map(|(group, size, keys)| {
+            let ix = group as usize;
+            let (name, members) = match group {
+                CacheGroup::InstalledGames => ("Installed games", plural(keys.len(), "game", "games")),
+                CacheGroup::Uninstalled => ("Uninstalled games", plural(keys.len(), "game", "games")),
+                CacheGroup::OtherApps => ("Other apps", plural(keys.len(), "app", "apps")),
             };
             // Only uninstalled games get a shortcut: their caches can't be used again.
-            let action = (*group == CacheGroup::Uninstalled && !keys.is_empty()).then(|| {
-                let keys = keys.clone();
-                button(("select-group", ix), "Select", ButtonStyle::Secondary).on_click(cx.listener(
-                    move |this, _, _, cx| {
+            let select = (group == CacheGroup::Uninstalled && !keys.is_empty()).then(|| {
+                div()
+                    .id("select-uninstalled")
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(p.accent))
+                    .cursor_pointer()
+                    .hover(|link| link.underline())
+                    .child("Select all")
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         this.marked.extend(keys.iter().cloned());
                         this.view = View::All;
                         cx.notify();
-                    },
-                ))
+                    }))
             });
             div()
                 .flex()
-                .items_center()
-                .gap_3()
-                .py_3()
-                .when(row > 0, |r| r.border_t_1().border_color(rgb(p.border)))
-                .child(div().size(px(10.0)).flex_none().rounded(px(3.0)).bg(rgb(p.groups[ix])))
+                .flex_col()
+                .gap_1()
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .child(div().font_weight(FontWeight::MEDIUM).child(name))
-                        .child(div().text_xs().text_color(rgb(p.muted)).truncate().child(description)),
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(rgb(p.muted))
+                        .child(div().size(px(10.0)).rounded(px(3.0)).bg(rgb(p.groups[ix])))
+                        .child(name),
                 )
-                .child(div().w(px(70.0)).text_right().text_color(rgb(p.muted)).child(match group {
-                    CacheGroup::InstalledGames | CacheGroup::Uninstalled => plural(keys.len(), "game", "games"),
-                    _ => plural(keys.len(), "app", "apps"),
-                }))
                 .child(
                     div()
-                        .w(px(90.0))
-                        .text_right()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(format::bytes(*size)),
+                        .flex()
+                        .items_baseline()
+                        .gap_2()
+                        .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(format::bytes(size)))
+                        .child(div().text_xs().text_color(rgb(p.muted)).child(members)),
                 )
-                .child(div().w(px(76.0)).flex().justify_end().children(action))
+                .children(select)
         }));
 
-        let largest_list = div()
+        let header = div()
             .flex()
-            .flex_col()
-            .children(scan.apps.iter().take(LARGEST_LIST_LEN).enumerate().map(|(ix, app)| {
-                let key = app.key.clone();
-                let fraction = (app.total_size as f64 / scan.apps[0].total_size.max(1) as f64).clamp(0.01, 1.0) as f32;
-                div()
-                    .id(("largest", ix))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|row| row.bg(rgb(p.hover)))
-                    .child(div().w(px(18.0)).text_xs().text_color(rgb(p.muted)).child(format!("{}", ix + 1)))
-                    .child(self.app_icon(app, 24.0))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().truncate().font_weight(FontWeight::MEDIUM).child(self.display_name(app)))
-                            .child(
-                                div()
-                                    .h(px(4.0))
-                                    .w_full()
-                                    .rounded_full()
-                                    .bg(rgb(p.raised))
-                                    .child(div().h_full().w(relative(fraction)).rounded_full().bg(rgb(p.accent))),
-                            ),
-                    )
-                    .child(div().w(px(84.0)).text_right().font_weight(FontWeight::SEMIBOLD).child(format::bytes(app.total_size)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.view = View::All;
-                        this.focus_app(&key, cx);
-                    }))
-            }));
+            .flex_none()
+            .items_end()
+            .justify_between()
+            .gap_6()
+            .h(px(OVERVIEW_HEADER_HEIGHT))
+            .child(hero)
+            .child(legend);
 
-        let section = || {
-            div()
-                .flex()
-                .flex_col()
-                .p_5()
-                .rounded_lg()
-                .bg(rgb(p.panel))
-                .border_1()
-                .border_color(rgb(p.border))
-        };
+        // The treemap fills the rest of the window, so its size in pixels is known before
+        // layout and the tiles can be placed directly.
+        let viewport = window.viewport_size();
+        let width = (f32::from(viewport.width) - 2.0 * OVERVIEW_PADDING).max(1.0);
+        let height = (f32::from(viewport.height) - TOP_BAR_HEIGHT - 2.0 * OVERVIEW_PADDING - OVERVIEW_GAP
+            - OVERVIEW_HEADER_HEIGHT)
+            .max(TREEMAP_MIN_HEIGHT);
+
+        let min_size = (scan.total_size as f64 * TREEMAP_MIN_SHARE) as u64;
+        let tiled = scan.apps.iter().take(TREEMAP_MAX_TILES).take_while(|app| app.total_size >= min_size).count().max(1);
+        let rest = &scan.apps[tiled..];
+        let rest_size: u64 = rest.iter().map(|app| app.total_size).sum();
+        let mut values: Vec<f64> = scan.apps[..tiled].iter().map(|app| app.total_size.max(1) as f64).collect();
+        if !rest.is_empty() {
+            values.push(rest_size.max(1) as f64);
+        }
+        let tiles = treemap::squarify(&values, width as f64, height as f64);
+
+        let treemap = div()
+            .relative()
+            .flex_none()
+            .w(px(width))
+            .h(px(height))
+            .children(tiles.iter().enumerate().map(|(ix, tile)| {
+                let cell = div()
+                    .absolute()
+                    .left(px(tile.x as f32))
+                    .top(px(tile.y as f32))
+                    .w(px(tile.w as f32))
+                    .h(px(tile.h as f32))
+                    .p(px(TREEMAP_GAP / 2.0))
+                    .overflow_hidden();
+                let (w, h) = (tile.w as f32 - TREEMAP_GAP, tile.h as f32 - TREEMAP_GAP);
+                match scan.apps[..tiled].get(ix) {
+                    Some(app) => cell.child(self.treemap_tile(ix, app, scan.total_size, w, h, cx)),
+                    None => cell.child(self.treemap_rest_tile(rest.len(), rest_size, w, h, cx)),
+                }
+            }));
 
         let page = div()
             .id("overview")
@@ -269,15 +245,10 @@ impl MainView {
             .track_scroll(&self.overview_scroll)
             .flex()
             .flex_col()
-            .gap_4()
-            .p_5()
-            .child(section().gap_5().child(hero).child(bar).child(rows))
-            .child(
-                section()
-                    .gap_3()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Largest caches"))
-                    .child(largest_list),
-            );
+            .gap(px(OVERVIEW_GAP))
+            .p(px(OVERVIEW_PADDING))
+            .child(header)
+            .child(treemap);
         div()
             .relative()
             .flex()
@@ -285,6 +256,97 @@ impl MainView {
             .child(page)
             .children(self.scrollbar("overview-scrollbar", &self.overview_scroll, cx))
             .into_any_element()
+    }
+
+    /// One app in the treemap, tinted by its group. What it shows depends on the room it has.
+    fn treemap_tile(&self, ix: usize, app: &AppCache, total: u64, w: f32, h: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+        let p = p();
+        let tint = p.groups[self.group_of(app) as usize];
+        let key = app.key.clone();
+        let large = w >= 220.0 && h >= 140.0;
+        let labelled = w >= 72.0 && h >= 46.0;
+        let icon_size = if large { 32.0 } else { 20.0 };
+        let shows_icon = w >= icon_size + 8.0 && h >= if labelled { 76.0 } else { icon_size + 8.0 };
+
+        div()
+            .id(("tile", ix))
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_between()
+            .when(!labelled, |tile| tile.items_center().justify_center())
+            .p(px(if large { 14.0 } else if labelled { 8.0 } else { 0.0 }))
+            .overflow_hidden()
+            .rounded_md()
+            .bg(with_alpha(tint, 0.16))
+            .border_1()
+            .border_color(with_alpha(tint, 0.45))
+            .cursor_pointer()
+            .hover(|tile| tile.bg(with_alpha(tint, 0.28)).border_color(rgb(tint)))
+            .when(shows_icon, |tile| tile.child(self.app_icon(app, icon_size)))
+            .when(labelled, |tile| {
+                tile.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::MEDIUM)
+                                .when(large, |name| name.text_base())
+                                .when(!large, |name| name.text_xs())
+                                .child(self.display_name(app)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .when(large, |size| size.text_2xl())
+                                        .when(!large, |size| size.text_xs())
+                                        .child(format::bytes(app.total_size)),
+                                )
+                                .when(large, |row| {
+                                    row.child(div().text_xs().text_color(rgb(p.muted)).child(percent(app.total_size, total)))
+                                }),
+                        ),
+                )
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.view = View::All;
+                this.focus_app(&key, cx);
+            }))
+    }
+
+    /// The apps too small to get a tile of their own, gathered into one.
+    fn treemap_rest_tile(&self, count: usize, size: u64, w: f32, h: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+        let p = p();
+        div()
+            .id("tile-rest")
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .p_2()
+            .overflow_hidden()
+            .rounded_md()
+            .bg(rgb(p.raised))
+            .border_1()
+            .border_color(rgb(p.border))
+            .cursor_pointer()
+            .hover(|tile| tile.bg(rgb(p.hover)).border_color(rgb(p.border_strong)))
+            .when(w >= 72.0 && h >= 46.0, |tile| {
+                tile.child(div().truncate().text_xs().text_color(rgb(p.muted)).child(format!("{count} more")))
+                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).child(format::bytes(size)))
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.view = View::All;
+                cx.notify();
+            }))
     }
 
     /// Search in the All apps tab bar. It takes typed keys while focused (see `edit_search`).

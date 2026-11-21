@@ -1,4 +1,5 @@
 mod components;
+mod treemap;
 mod views;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -966,7 +967,7 @@ impl Render for MainView {
                     .flex_1()
                     .min_h_0()
                     .map(|body| match self.view {
-                        View::Overview => body.child(self.render_overview(cx)),
+                        View::Overview => body.child(self.render_overview(window, cx)),
                         View::All => body.child(self.render_list(cx)).children(self.render_detail(cx)),
                         View::Settings => body.child(self.render_settings_page(cx)),
                     }),
