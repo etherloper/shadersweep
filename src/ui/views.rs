@@ -78,7 +78,7 @@ impl MainView {
             .gap_4()
             .h(px(TOP_BAR_HEIGHT))
             .px_3()
-            .bg(rgb(p.panel))
+            .bg(rgb(p.bg))
             .border_b_1()
             .border_color(rgb(p.border))
             .child(
