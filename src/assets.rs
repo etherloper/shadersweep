@@ -19,7 +19,7 @@ pub enum Icon {
     Info,
     Dashboard,
     List,
-    Broom,
+    Logo,
     Search,
 }
 
@@ -58,7 +58,7 @@ icons! {
     Info => "info",
     Dashboard => "dashboard",
     List => "list",
-    Broom => "broom",
+    Logo => "logo",
     Search => "search",
 }
 

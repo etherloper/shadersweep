@@ -1543,7 +1543,7 @@ fn status_row(glyph: Icon, tint: u32, title: String, detail: String) -> Div {
         )
 }
 
-/// The app's logo: a green tile with a broom (matches the exe icon).
+/// The app's logo: a green tile with an S (matches the exe icon).
 fn app_logo(size: f32) -> Div {
     // The exe icon's own colours in both themes, so the logo always matches it.
     div()
@@ -1554,7 +1554,7 @@ fn app_logo(size: f32) -> Div {
         .justify_center()
         .rounded(px(size * 0.22))
         .bg(rgb(theme::DARK.accent))
-        .child(icon(Icon::Broom, size * 0.68, theme::DARK.on_accent))
+        .child(icon(Icon::Logo, size * 0.86, theme::DARK.on_accent))
 }
 
 /// A label/value row in the info panel; the caller adds the value as a child.
