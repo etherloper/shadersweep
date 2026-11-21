@@ -20,6 +20,7 @@ pub enum Icon {
     Dashboard,
     List,
     Broom,
+    Search,
 }
 
 macro_rules! icons {
@@ -58,6 +59,7 @@ icons! {
     Dashboard => "dashboard",
     List => "list",
     Broom => "broom",
+    Search => "search",
 }
 
 pub struct Assets;

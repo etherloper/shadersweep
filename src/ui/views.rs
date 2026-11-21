@@ -4,13 +4,15 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, Div, FontWeight, SharedString, Stateful, div,
-    ease_out_quint, img, prelude::*, px, relative, rgb, rgba, uniform_list,
+    Animation, AnimationExt, AnyElement, Context, Div, FontWeight, MouseButton, MouseDownEvent, ScrollHandle, SharedString,
+    Stateful, div,
+    ease_out_quint, img, point, prelude::*, px, relative, rgb, rgba, uniform_list,
 };
 
 use super::components::*;
 use super::{
-    CacheGroup, MainView, NoticeAction, NoticeKind, ScanState, SortKey, UpdateState, View, percent, store_app_name,
+    CacheGroup, MainView, NoticeAction, NoticeKind, ScanState, ScrollMetrics, ScrollbarDrag, SortKey, UpdateState, View,
+    percent, store_app_name,
 };
 use crate::assets::Icon;
 use crate::cache::AppCache;
@@ -24,6 +26,8 @@ const ROW_HEIGHT: f32 = 60.0;
 const TOP_BAR_HEIGHT: f32 = 52.0;
 const DETAIL_WIDTH: f32 = 380.0;
 const DETAIL_LABEL_WIDTH: f32 = 92.0;
+const SEARCH_WIDTH: f32 = 260.0;
+const SCROLLBAR_WIDTH: f32 = 12.0;
 const SETTINGS_COLUMN_WIDTH: f32 = 720.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
 /// Below this share a segment is too narrow to hold its percentage label.
@@ -54,6 +58,7 @@ impl MainView {
         let shown = self.visible_apps().len();
         let list_view = self.view == View::All;
         let update_waiting = matches!(self.update, UpdateState::Available(_));
+        let search = if list_view { Some(self.render_search(cx)) } else { None };
         let view_tab = |id: &'static str, glyph: Icon, label: &'static str, count: Option<usize>, view: View| {
             tab(id, glyph, label, count, self.view == view).on_click(cx.listener(move |this, _, _, cx| {
                 this.show_view(view, cx);
@@ -76,6 +81,7 @@ impl MainView {
                     .child(view_tab("view-overview", Icon::Dashboard, "Overview", None, View::Overview))
                     .child(view_tab("view-all", Icon::List, "All apps", Some(self.visible_apps().len()), View::All)),
             )
+            .children(search)
             .child(div().flex_1())
             .when(self.refreshing, |bar| bar.child(div().text_xs().text_color(rgb(p.muted)).child("Refreshing…")))
             .when(list_view && self.ready_scan().is_some(), |bar| {
@@ -255,10 +261,11 @@ impl MainView {
                 .border_color(rgb(p.border))
         };
 
-        div()
+        let page = div()
             .id("overview")
             .flex_1()
             .overflow_y_scroll()
+            .track_scroll(&self.overview_scroll)
             .flex()
             .flex_col()
             .gap_4()
@@ -269,8 +276,125 @@ impl MainView {
                     .gap_3()
                     .child(div().font_weight(FontWeight::SEMIBOLD).child("Largest caches"))
                     .child(largest_list),
-            )
+            );
+        div()
+            .relative()
+            .flex()
+            .flex_1()
+            .child(page)
+            .children(self.scrollbar("overview-scrollbar", &self.overview_scroll, cx))
             .into_any_element()
+    }
+
+    /// The All apps search field. It takes typed keys while focused (see `edit_search`).
+    fn render_search(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let p = p();
+        let focused = self.search_focused;
+        let caret = div()
+            .w(px(1.5))
+            .h(px(16.0))
+            .bg(rgb(p.text))
+            .with_animation(
+                "search-caret",
+                Animation::new(Duration::from_millis(1000)).repeat(),
+                |caret, delta| caret.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
+            );
+        let placeholder = div().text_color(rgb(p.muted)).child("Search apps");
+        div()
+            .id("search")
+            .flex()
+            .items_center()
+            .gap_2()
+            .w(px(SEARCH_WIDTH))
+            .h(px(32.0))
+            .pl_2p5()
+            .pr_1()
+            .rounded_md()
+            .bg(rgb(p.bg))
+            .border_1()
+            .border_color(rgb(if focused { p.focus } else { p.border_strong }))
+            .cursor_text()
+            .child(icon(Icon::Search, 15.0, p.muted))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_sm()
+                    .when(!self.search.is_empty(), |text| text.child(self.search.clone()))
+                    .when(focused, |text| text.child(caret))
+                    .when(self.search.is_empty(), |text| text.child(placeholder)),
+            )
+            .when(!self.search.is_empty(), |field| {
+                field.child(square_button("clear-search", Icon::X, 24.0, p.muted).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.set_search(String::new(), cx);
+                    },
+                )))
+            })
+            // A click (down and up on the field) focuses it; the window's mouse-down handler
+            // has already cleared focus by then, so a click inside simply keeps it.
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.search_focused = true;
+                cx.notify();
+            }))
+    }
+
+    /// A slim scrollbar over the right edge of a scrolling area: drag the thumb, or click
+    /// the track to move a page. Hidden when everything fits.
+    fn scrollbar(&self, id: &'static str, handle: &ScrollHandle, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let p = p();
+        let metrics = ScrollMetrics::of(handle)?;
+        let track_handle = handle.clone();
+        let thumb_handle = handle.clone();
+        Some(
+            div()
+                .id((id, 0usize))
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(SCROLLBAR_WIDTH))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |_, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        let Some(metrics) = ScrollMetrics::of(&track_handle) else { return };
+                        let thumb_start = track_handle.bounds().origin.y + metrics.thumb_top;
+                        let page = if event.position.y < thumb_start { metrics.viewport } else { -metrics.viewport };
+                        let offset = track_handle.offset();
+                        track_handle.set_offset(point(offset.x, (offset.y + page).clamp(-metrics.max, px(0.0))));
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .id((id, 1usize))
+                        .absolute()
+                        .top(metrics.thumb_top)
+                        .right(px(3.0))
+                        .w(px(6.0))
+                        .h(metrics.thumb)
+                        .rounded_full()
+                        .bg(with_alpha(p.muted, 0.45))
+                        .hover(|thumb| thumb.bg(with_alpha(p.muted, 0.75)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                // Grabbing the thumb shouldn't also page-jump via the track.
+                                cx.stop_propagation();
+                                this.scrollbar_drag = Some(ScrollbarDrag {
+                                    handle: thumb_handle.clone(),
+                                    start_y: event.position.y,
+                                    start_offset: thumb_handle.offset().y,
+                                });
+                            }),
+                        ),
+                ),
+        )
     }
 
     // ---- list -------------------------------------------------------------------------
@@ -281,6 +405,9 @@ impl MainView {
             ScanState::Scanning => Some("Scanning the shader cache…".to_owned()),
             ScanState::Failed(err) => Some(err.clone()),
             ScanState::Ready(scan) if scan.apps.is_empty() => Some("The shader cache is empty.".into()),
+            ScanState::Ready(_) if visible_count == 0 && !self.search.trim().is_empty() => {
+                Some(format!("No apps match \u{201c}{}\u{201d}.", self.search.trim()))
+            }
             ScanState::Ready(_) if visible_count == 0 => {
                 Some("Nothing over 1 MB is cached. Turn off \"Hide caches under 1 MB\" in Settings to see everything.".into())
             }
@@ -296,20 +423,29 @@ impl MainView {
                 .min_h_0()
                 .child(self.render_column_headers(cx))
                 .child(
-                    uniform_list(
-                        "apps",
-                        visible_count,
-                        cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
-                            let now = SystemTime::now();
-                            let visible = this.visible_apps();
-                            let largest = visible.iter().map(|app| app.total_size).max().unwrap_or(1).max(1);
-                            range
-                                .filter_map(|ix| visible.get(ix).map(|app| this.render_row(ix, app, largest, now, cx)))
-                                .collect::<Vec<_>>()
-                        }),
-                    )
-                    .track_scroll(self.list_scroll.clone())
-                    .flex_1(),
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .child(
+                            uniform_list(
+                                "apps",
+                                visible_count,
+                                cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
+                                    let now = SystemTime::now();
+                                    let visible = this.visible_apps();
+                                    let largest = visible.iter().map(|app| app.total_size).max().unwrap_or(1).max(1);
+                                    range
+                                        .filter_map(|ix| visible.get(ix).map(|app| this.render_row(ix, app, largest, now, cx)))
+                                        .collect::<Vec<_>>()
+                                }),
+                            )
+                            .track_scroll(self.list_scroll.clone())
+                            .flex_1(),
+                        )
+                        .children(self.scrollbar("list-scrollbar", &self.list_scroll.0.borrow().base_handle, cx)),
                 )
                 .into_any_element(),
         };
@@ -653,17 +789,27 @@ impl MainView {
                 .child(header)
                 .child(
                     div()
-                        .id("detail-body")
-                        .flex_1()
-                        .overflow_y_scroll()
+                        .relative()
                         .flex()
                         .flex_col()
-                        .gap_5()
-                        .px_5()
-                        .pb_5()
-                        .child(hero)
-                        .children(callout_text.map(|(text, tint)| callout(text, tint)))
-                        .child(details),
+                        .flex_1()
+                        .min_h_0()
+                        .child(
+                            div()
+                                .id("detail-body")
+                                .flex_1()
+                                .overflow_y_scroll()
+                                .track_scroll(&self.detail_scroll)
+                                .flex()
+                                .flex_col()
+                                .gap_5()
+                                .px_5()
+                                .pb_5()
+                                .child(hero)
+                                .children(callout_text.map(|(text, tint)| callout(text, tint)))
+                                .child(details),
+                        )
+                        .children(self.scrollbar("detail-scrollbar", &self.detail_scroll, cx)),
                 )
                 .child(footer),
         )
@@ -914,6 +1060,7 @@ impl MainView {
             ("Delete", "Delete checked or current"),
             ("Esc", "Deselect, or leave Settings"),
             ("F5", "Rescan"),
+            ("Ctrl F", "Search apps"),
             ("Ctrl ,", "Open Settings"),
         ];
         let keyboard = div().flex().flex_col().children(shortcuts.into_iter().enumerate().map(|(ix, (keys, action))| {
@@ -949,15 +1096,22 @@ impl MainView {
 
         // A vertical flex container lets the column keep its full height and overflow, which
         // is what makes the page scroll; in a row it would be stretched to fit instead.
-        div()
+        let page = div()
             .id("settings-page")
             .flex_1()
             .overflow_y_scroll()
+            .track_scroll(&self.settings_scroll)
             .flex()
             .flex_col()
             .items_center()
             .p_5()
-            .child(column.flex_none())
+            .child(column.flex_none());
+        div()
+            .relative()
+            .flex()
+            .flex_1()
+            .child(page)
+            .children(self.scrollbar("settings-scrollbar", &self.settings_scroll, cx))
             .into_any_element()
     }
 

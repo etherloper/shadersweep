@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    Context, FocusHandle, KeyDownEvent, RenderImage, ScrollStrategy, UniformListScrollHandle, Window, div,
-    prelude::*, rgb,
+    Context, FocusHandle, KeyDownEvent, MouseButton, MouseMoveEvent, Pixels, RenderImage, ScrollHandle, ScrollStrategy,
+    UniformListScrollHandle, Window, div, point, prelude::*, px, rgb,
 };
 
 use crate::cache::{self, AppCache, CacheFile, DeleteReport, ScanResult};
@@ -84,6 +84,42 @@ impl SortKey {
     }
 }
 
+struct ScrollbarDrag {
+    handle: ScrollHandle,
+    start_y: Pixels,
+    start_offset: Pixels,
+}
+
+/// The geometry of a scrollable area's thumb, from its scroll handle's last layout.
+struct ScrollMetrics {
+    viewport: Pixels,
+    /// How far the content can scroll (positive).
+    max: Pixels,
+    thumb: Pixels,
+    thumb_top: Pixels,
+}
+
+impl ScrollMetrics {
+    const MIN_THUMB: Pixels = px(28.0);
+
+    /// `None` when the content fits and there is nothing to scroll.
+    fn of(handle: &ScrollHandle) -> Option<Self> {
+        let viewport = handle.bounds().size.height;
+        let max = handle.max_offset().height;
+        if viewport <= px(0.0) || max <= px(1.0) {
+            return None;
+        }
+        let thumb = (viewport * (viewport / (viewport + max))).max(Self::MIN_THUMB).min(viewport);
+        let progress = (-handle.offset().y / max).clamp(0.0, 1.0);
+        Some(Self { viewport, max, thumb, thumb_top: (viewport - thumb) * progress })
+    }
+
+    /// Content distance scrolled per pixel of thumb travel.
+    fn content_per_pixel(&self) -> f32 {
+        self.max / (self.viewport - self.thumb).max(px(1.0))
+    }
+}
+
 /// The overview's split of the cache. The order is fixed and matches `Palette::groups`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum CacheGroup {
@@ -141,6 +177,14 @@ pub struct MainView {
     update_progress: Arc<AtomicU64>,
     focus_handle: FocusHandle,
     list_scroll: UniformListScrollHandle,
+    overview_scroll: ScrollHandle,
+    settings_scroll: ScrollHandle,
+    detail_scroll: ScrollHandle,
+    /// A scrollbar thumb being dragged.
+    scrollbar_drag: Option<ScrollbarDrag>,
+    /// Text in the All apps search field, matched against names and exe names.
+    search: String,
+    search_focused: bool,
 }
 
 impl MainView {
@@ -178,6 +222,12 @@ impl MainView {
             update_progress: Arc::new(AtomicU64::new(0)),
             focus_handle,
             list_scroll: UniformListScrollHandle::new(),
+            overview_scroll: ScrollHandle::new(),
+            settings_scroll: ScrollHandle::new(),
+            detail_scroll: ScrollHandle::new(),
+            scrollbar_drag: None,
+            search: String::new(),
+            search_focused: false,
         };
         if let Some(problem) = settings_problem {
             view.show_notice(NoticeKind::Warning, problem, cx);
@@ -538,10 +588,14 @@ impl MainView {
     }
 
     fn visible_apps(&self) -> Vec<&AppCache> {
+        let query = self.search.trim().to_lowercase();
         let mut apps: Vec<&AppCache> = self
             .all_apps()
             .iter()
             .filter(|app| !self.settings.hide_small || app.total_size >= SMALL_CACHE_BYTES)
+            .filter(|app| {
+                query.is_empty() || app.key.contains(&query) || self.display_name(app).to_lowercase().contains(&query)
+            })
             .collect();
         apps.sort_by(|a, b| {
             let order = match self.sort {
@@ -750,6 +804,68 @@ impl MainView {
         cx.notify();
     }
 
+    // ---- search -----------------------------------------------------------------------
+
+    fn focus_search(&mut self, cx: &mut Context<Self>) {
+        self.show_view(View::All, cx);
+        self.search_focused = true;
+        cx.notify();
+    }
+
+    fn set_search(&mut self, text: String, cx: &mut Context<Self>) {
+        self.search = text;
+        self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    /// Typing into the search field. Returns whether the key was used, so arrows still
+    /// move through the list while searching.
+    fn edit_search(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let keystroke = &event.keystroke;
+        let ctrl = keystroke.modifiers.control;
+        match keystroke.key.as_str() {
+            "escape" if self.search.is_empty() => self.search_focused = false,
+            "escape" => self.set_search(String::new(), cx),
+            "enter" => self.search_focused = false,
+            "backspace" if ctrl => self.set_search(String::new(), cx),
+            "backspace" => {
+                let mut text = self.search.clone();
+                text.pop();
+                self.set_search(text, cx);
+            }
+            "v" if ctrl => {
+                let pasted = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
+                let line = pasted.lines().next().unwrap_or_default();
+                self.set_search(format!("{}{line}", self.search), cx);
+            }
+            _ if ctrl || keystroke.modifiers.alt => return false,
+            _ => match keystroke.key_char.as_deref() {
+                Some(typed) if !typed.chars().any(char::is_control) => {
+                    self.set_search(format!("{}{typed}", self.search), cx);
+                }
+                _ => return false,
+            },
+        }
+        cx.notify();
+        true
+    }
+
+    // ---- scrollbars -------------------------------------------------------------------
+
+    /// Moves a dragged scrollbar thumb, mapping mouse travel onto the content's scroll range.
+    fn drag_scrollbar(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = &self.scrollbar_drag else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.scrollbar_drag = None;
+            return;
+        }
+        let Some(track) = ScrollMetrics::of(&drag.handle) else { return };
+        let travel = event.position.y - drag.start_y;
+        let offset = (drag.start_offset - travel * track.content_per_pixel()).clamp(-track.max, px(0.0));
+        drag.handle.set_offset(point(drag.handle.offset().x, offset));
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         if self.confirm.is_some() {
@@ -765,6 +881,13 @@ impl MainView {
         }
         if key == "," && event.keystroke.modifiers.control {
             self.show_view(View::Settings, cx);
+            return;
+        }
+        if key == "f" && event.keystroke.modifiers.control {
+            self.focus_search(cx);
+            return;
+        }
+        if self.search_focused && self.edit_search(event, cx) {
             return;
         }
         if self.view == View::Settings {
@@ -813,6 +936,21 @@ impl Render for MainView {
         div()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_mouse_move(cx.listener(Self::drag_scrollbar))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.scrollbar_drag = None),
+            )
+            // Clicking anywhere outside the search field leaves it.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.search_focused {
+                        this.search_focused = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .relative()
             .size_full()
             .flex()
