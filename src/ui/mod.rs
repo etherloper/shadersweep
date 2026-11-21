@@ -883,7 +883,7 @@ impl MainView {
             self.show_view(View::Settings, cx);
             return;
         }
-        if key == "f" && event.keystroke.modifiers.control {
+        if key == "k" && event.keystroke.modifiers.control {
             self.focus_search(cx);
             return;
         }

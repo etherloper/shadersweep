@@ -351,8 +351,19 @@ impl MainView {
                     .text_sm()
                     .when(!empty, |text| text.child(self.search.clone()))
                     .when(focused, |text| text.child(caret))
-                    .when(empty, |text| text.child(div().text_color(rgb(p.muted)).child("Search apps…"))),
+                    .when(empty, |text| text.child(div().text_color(rgb(p.muted)).opacity(0.7).child("Search"))),
             )
+            // The shortcut hint gives way to the clear button once something is typed.
+            .when(empty, |field| {
+                field.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .gap_1()
+                        .child(kbd("Ctrl").text_color(rgb(p.muted)))
+                        .child(kbd("K").text_color(rgb(p.muted))),
+                )
+            })
             .when(!empty, |field| {
                 field.child(
                     div()
@@ -1096,7 +1107,7 @@ impl MainView {
             ("Delete", "Delete checked or current"),
             ("Esc", "Deselect, or leave Settings"),
             ("F5", "Rescan"),
-            ("Ctrl F", "Search apps"),
+            ("Ctrl K", "Search apps"),
             ("Ctrl ,", "Open Settings"),
         ];
         let keyboard = div().flex().flex_col().children(shortcuts.into_iter().enumerate().map(|(ix, (keys, action))| {
