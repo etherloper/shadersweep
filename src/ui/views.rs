@@ -263,9 +263,10 @@ impl MainView {
         let p = p();
         let tint = p.groups[self.group_of(app) as usize];
         let key = app.key.clone();
+        let huge = w >= 420.0 && h >= 300.0;
         let large = w >= 220.0 && h >= 140.0;
         let labelled = w >= 72.0 && h >= 46.0;
-        let icon_size = if large { 32.0 } else { 20.0 };
+        let icon_size = if huge { 40.0 } else if large { 32.0 } else { 20.0 };
         let shows_icon = w >= icon_size + 8.0 && h >= if labelled { 76.0 } else { icon_size + 8.0 };
 
         div()
@@ -275,7 +276,7 @@ impl MainView {
             .flex_col()
             .justify_between()
             .when(!labelled, |tile| tile.items_center().justify_center())
-            .p(px(if large { 14.0 } else if labelled { 8.0 } else { 0.0 }))
+            .p(px(if huge { 22.0 } else if large { 14.0 } else if labelled { 8.0 } else { 0.0 }))
             .overflow_hidden()
             .rounded_md()
             .bg(with_alpha(tint, 0.16))
@@ -294,7 +295,8 @@ impl MainView {
                             div()
                                 .truncate()
                                 .font_weight(FontWeight::MEDIUM)
-                                .when(large, |name| name.text_base())
+                                .when(huge, |name| name.text_xl())
+                                .when(large && !huge, |name| name.text_base())
                                 .when(!large, |name| name.text_xs())
                                 .child(self.display_name(app)),
                         )
@@ -306,7 +308,8 @@ impl MainView {
                                 .child(
                                     div()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .when(large, |size| size.text_2xl())
+                                        .when(huge, |size| size.text_size(px(40.0)).line_height(px(46.0)))
+                                        .when(large && !huge, |size| size.text_2xl())
                                         .when(!large, |size| size.text_xs())
                                         .child(format::bytes(app.total_size)),
                                 )
@@ -325,13 +328,15 @@ impl MainView {
     /// The apps too small to get a tile of their own, gathered into one.
     fn treemap_rest_tile(&self, count: usize, size: u64, w: f32, h: f32, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = p();
+        let labelled = w >= 72.0 && h >= 46.0;
         div()
             .id("tile-rest")
             .size_full()
             .flex()
             .flex_col()
             .justify_end()
-            .p_2()
+            .when(!labelled, |tile| tile.items_center().justify_center())
+            .p(px(if labelled { 8.0 } else { 0.0 }))
             .overflow_hidden()
             .rounded_md()
             .bg(rgb(p.raised))
@@ -339,9 +344,13 @@ impl MainView {
             .border_color(rgb(p.border))
             .cursor_pointer()
             .hover(|tile| tile.bg(rgb(p.hover)).border_color(rgb(p.border_strong)))
-            .when(w >= 72.0 && h >= 46.0, |tile| {
+            .when(labelled, |tile| {
                 tile.child(div().truncate().text_xs().text_color(rgb(p.muted)).child(format!("{count} more")))
                     .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).child(format::bytes(size)))
+            })
+            // Too narrow for the full label: just the count.
+            .when(!labelled && w >= 28.0 && h >= 20.0, |tile| {
+                tile.child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(p.muted)).child(format!("+{count}")))
             })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.view = View::All;
