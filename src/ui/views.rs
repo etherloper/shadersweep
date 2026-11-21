@@ -28,6 +28,8 @@ const TOP_BAR_HEIGHT: f32 = 52.0;
 const DETAIL_WIDTH: f32 = 380.0;
 const DETAIL_LABEL_WIDTH: f32 = 92.0;
 const SEARCH_WIDTH: f32 = 260.0;
+const SEARCH_HEIGHT: f32 = 34.0;
+const SEARCH_EXPAND: Duration = Duration::from_millis(180);
 const SCROLLBAR_WIDTH: f32 = 12.0;
 const SETTINGS_COLUMN_WIDTH: f32 = 720.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
@@ -287,10 +289,37 @@ impl MainView {
             .into_any_element()
     }
 
-    /// The All apps search field. It takes typed keys while focused (see `edit_search`).
-    fn render_search(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// Search in the All apps tab bar: an icon button that slides open into a field when
+    /// focused, and folds back once it is left empty. It takes typed keys while focused
+    /// (see `edit_search`).
+    fn render_search(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = p();
         let focused = self.search_focused;
+        let empty = self.search.is_empty();
+        let focus_field = cx.listener(|this, _, _, cx| {
+            this.search_focused = true;
+            cx.notify();
+        });
+
+        if empty && !focused {
+            return div()
+                .id("search-open")
+                .size(px(SEARCH_HEIGHT))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .cursor_pointer()
+                .bg(rgb(p.raised))
+                .border_1()
+                .border_color(rgb(p.border))
+                .hover(|button| button.border_color(rgb(p.border_strong)).bg(rgb(p.hover)))
+                .child(icon(Icon::Search, 15.0, p.muted))
+                .on_click(focus_field)
+                .into_any_element();
+        }
+
         let caret = div()
             .w(px(1.5))
             .h(px(16.0))
@@ -300,25 +329,24 @@ impl MainView {
                 Animation::new(Duration::from_millis(1000)).repeat(),
                 |caret, delta| caret.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
             );
-        let placeholder = div().text_color(rgb(p.muted)).child("Search apps…");
-        let empty = self.search.is_empty();
         div()
             .id("search")
             .flex()
+            .flex_none()
             .items_center()
             .gap_2()
-            .w(px(SEARCH_WIDTH))
-            .h(px(34.0))
+            .h(px(SEARCH_HEIGHT))
             .pl_3()
             .pr_1p5()
+            .overflow_hidden()
             .rounded_full()
             .bg(rgb(if focused { p.panel } else { p.raised }))
             .border_1()
             .cursor_text()
             .when(focused, |field| {
-                // A soft ring around the field while it has focus.
-                field.border_color(rgb(p.focus)).shadow(vec![BoxShadow {
-                    color: with_alpha(p.focus, 0.25),
+                // A soft accent ring while the field has focus.
+                field.border_color(rgb(p.accent)).shadow(vec![BoxShadow {
+                    color: with_alpha(p.accent, 0.25),
                     offset: point(px(0.0), px(0.0)),
                     blur_radius: px(0.0),
                     spread_radius: px(3.0),
@@ -339,10 +367,8 @@ impl MainView {
                     .text_sm()
                     .when(!empty, |text| text.child(self.search.clone()))
                     .when(focused, |text| text.child(caret))
-                    .when(empty, |text| text.child(placeholder)),
+                    .when(empty, |text| text.child(div().text_color(rgb(p.muted)).child("Search apps…"))),
             )
-            // The shortcut hint while idle; a clear button once there is text.
-            .when(empty && !focused, |field| field.child(kbd("Ctrl F")))
             .when(!empty, |field| {
                 field.child(
                     div()
@@ -360,12 +386,15 @@ impl MainView {
                         .on_click(cx.listener(|this, _, _, cx| this.set_search(String::new(), cx))),
                 )
             })
-            // A click (down and up on the field) focuses it; the window's mouse-down handler
-            // has already cleared focus by then, so a click inside simply keeps it.
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.search_focused = true;
-                cx.notify();
-            }))
+            // A click (down and up on the field) keeps it focused; the window's mouse-down
+            // handler has already cleared focus by then.
+            .on_click(focus_field)
+            .with_animation(
+                "search-expand",
+                Animation::new(SEARCH_EXPAND).with_easing(ease_out_quint()),
+                |field, delta| field.w(px(SEARCH_HEIGHT + (SEARCH_WIDTH - SEARCH_HEIGHT) * delta)),
+            )
+            .into_any_element()
     }
 
     /// A slim scrollbar over the right edge of a scrolling area: drag the thumb, or click

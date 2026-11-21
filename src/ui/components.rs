@@ -150,7 +150,7 @@ pub fn checkbox(id: impl Into<ElementId>, state: CheckState) -> Stateful<Div> {
             .child(div().w(px(8.0)).h(px(2.0)).rounded_full().bg(rgb(p.on_accent))),
         CheckState::Unchecked => base
             .border_color(rgb(p.muted))
-            .hover(|c| c.border_color(rgb(p.focus))),
+            .hover(|c| c.border_color(rgb(p.accent))),
     }
 }
 

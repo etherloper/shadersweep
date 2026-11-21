@@ -23,7 +23,6 @@ pub struct Palette {
     pub danger_hover: u32,
     pub on_danger: u32,
     pub warning: u32,
-    pub focus: u32,
     /// Track and knob of a switch that is on. Neutral, so green stays reserved for status.
     pub switch_on: u32,
     pub switch_knob_on: u32,
@@ -56,7 +55,6 @@ pub const DARK: Palette = Palette {
     danger_hover: 0xb83229,
     on_danger: 0xffffff,
     warning: 0xf2b84b,
-    focus: 0x6aa9ff,
     switch_on: 0xd8d8dc,
     switch_knob_on: 0x0b0b0c,
     toast_bg: 0x1c1c1f,
@@ -83,7 +81,6 @@ pub const LIGHT: Palette = Palette {
     danger_hover: 0xbb2e27,
     on_danger: 0xffffff,
     warning: 0x9a5b00,
-    focus: 0x2563eb,
     switch_on: 0x2a2f36,
     switch_knob_on: 0xffffff,
     toast_bg: 0xffffff,
