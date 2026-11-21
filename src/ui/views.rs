@@ -28,8 +28,6 @@ const TOP_BAR_HEIGHT: f32 = 52.0;
 const DETAIL_WIDTH: f32 = 380.0;
 const DETAIL_LABEL_WIDTH: f32 = 92.0;
 const SEARCH_WIDTH: f32 = 260.0;
-const SEARCH_HEIGHT: f32 = 34.0;
-const SEARCH_EXPAND: Duration = Duration::from_millis(180);
 const SCROLLBAR_WIDTH: f32 = 12.0;
 const SETTINGS_COLUMN_WIDTH: f32 = 720.0;
 const CONFIRM_LIST_LIMIT: usize = 6;
@@ -289,10 +287,8 @@ impl MainView {
             .into_any_element()
     }
 
-    /// Search in the All apps tab bar: an icon button that slides open into a field when
-    /// focused, and folds back once it is left empty. It takes typed keys while focused
-    /// (see `edit_search`).
-    fn render_search(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Search in the All apps tab bar. It takes typed keys while focused (see `edit_search`).
+    fn render_search(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = p();
         let focused = self.search_focused;
         let empty = self.search.is_empty();
@@ -300,21 +296,6 @@ impl MainView {
             this.search_focused = true;
             cx.notify();
         });
-
-        if empty && !focused {
-            return div()
-                .id("search-open")
-                .size(px(SEARCH_HEIGHT))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .group("search-open")
-                .child(icon(Icon::Search, 15.0, p.muted).group_hover("search-open", |i| i.text_color(rgb(p.text))))
-                .on_click(focus_field)
-                .into_any_element();
-        }
 
         let caret = div()
             .w(px(1.5))
@@ -333,6 +314,7 @@ impl MainView {
             .flex_none()
             .items_center()
             .gap_2()
+            .w(px(SEARCH_WIDTH))
             .h_full()
             .px_1()
             .overflow_hidden()
@@ -382,12 +364,6 @@ impl MainView {
             // A click (down and up on the field) keeps it focused; the window's mouse-down
             // handler has already cleared focus by then.
             .on_click(focus_field)
-            .with_animation(
-                "search-expand",
-                Animation::new(SEARCH_EXPAND).with_easing(ease_out_quint()),
-                |field, delta| field.w(px(SEARCH_HEIGHT + (SEARCH_WIDTH - SEARCH_HEIGHT) * delta)),
-            )
-            .into_any_element()
     }
 
     /// A slim scrollbar over the right edge of a scrolling area: drag the thumb, or click
