@@ -89,6 +89,49 @@ fn is_newer(candidate: &str, current: &str) -> bool {
     }
 }
 
+/// Release notes are Markdown written for GitHub, but the update card shows a few lines of
+/// plain text. Markup is stripped, and lines that only point back to GitHub (the "Full
+/// Changelog" link, section headings, contributor credits) are dropped: the card has its own
+/// Release notes button.
+fn plain_notes(markdown: &str) -> String {
+    markdown.lines().filter_map(plain_line).collect::<Vec<_>>().join("\n")
+}
+
+fn plain_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    let (bullet, rest) = match line.strip_prefix("* ").or_else(|| line.strip_prefix("- ")) {
+        Some(rest) => ("• ", rest),
+        None => ("", line.trim_start_matches('#').trim_start()),
+    };
+    let mut text = strip_links(rest).replace("**", "").replace("__", "").replace('`', "");
+    // GitHub's generated entries end with "by @author in <pull request URL>".
+    if let Some(credit) = text.find(" by @") {
+        text.truncate(credit);
+    }
+    let text = text.trim();
+    let lower = text.to_ascii_lowercase();
+    let github_only = lower.starts_with("full changelog")
+        || lower == "what's changed"
+        || lower == "new contributors"
+        || lower.contains("made their first contribution");
+    (!text.is_empty() && !github_only).then(|| format!("{bullet}{text}"))
+}
+
+/// `[label](url)` becomes `label`.
+fn strip_links(text: &str) -> String {
+    let mut plain = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let Some(middle) = rest[open..].find("](").map(|i| open + i) else { break };
+        let Some(close) = rest[middle..].find(')').map(|i| middle + i) else { break };
+        plain.push_str(&rest[..open]);
+        plain.push_str(&rest[open + 1..middle]);
+        rest = &rest[close + 1..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
 fn parse_release(json: &str) -> Result<Release, String> {
     let release: GithubRelease =
         serde_json::from_str(json).map_err(|err| format!("unexpected response from GitHub ({err})"))?;
@@ -101,7 +144,7 @@ fn parse_release(json: &str) -> Result<Release, String> {
     let checksum = asset(CHECKSUM_ASSET).ok_or_else(|| format!("release {version} has no checksum file"))?;
     Ok(Release {
         version,
-        notes: release.body.unwrap_or_default().trim().to_owned(),
+        notes: plain_notes(release.body.as_deref().unwrap_or_default()),
         page_url: release.html_url,
         exe_url: exe.browser_download_url.clone(),
         exe_size: exe.size,
@@ -308,5 +351,23 @@ mod tests {
         assert_eq!(fs::read(sibling(&target, ".old")).unwrap(), b"old");
         assert!(!staged.exists());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn release_notes_become_plain_text() {
+        assert_eq!(
+            plain_notes("**Full Changelog**: https://github.com/etherloper/shadersweep/compare/v0.1.3...v0.1.4"),
+            ""
+        );
+        let generated = "## What's Changed\n\
+            * Treemap overview by @etherloper in https://github.com/etherloper/shadersweep/pull/4\n\
+            \n\
+            ## New Contributors\n\
+            * @someone made their first contribution in https://github.com/etherloper/shadersweep/pull/5\n\
+            \n\
+            **Full Changelog**: https://github.com/etherloper/shadersweep/compare/v0.1.3...v0.1.4";
+        assert_eq!(plain_notes(generated), "• Treemap overview");
+        let written = "### Highlights\n- **Faster** scans with `rayon`\n- See [the docs](https://example.com) for more";
+        assert_eq!(plain_notes(written), "Highlights\n• Faster scans with rayon\n• See the docs for more");
     }
 }
