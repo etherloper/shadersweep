@@ -23,9 +23,8 @@ pub struct Palette {
     pub danger_hover: u32,
     pub on_danger: u32,
     pub warning: u32,
-    /// Track and knob of a switch that is on. Neutral, so green stays reserved for status.
-    pub switch_on: u32,
-    pub switch_knob_on: u32,
+    /// Neutral emphasis: the chosen theme's outline and the marks in the theme previews.
+    pub highlight: u32,
     pub toast_bg: u32,
     pub toast_text: u32,
     /// RGBA, drawn behind dialogs.
@@ -53,8 +52,7 @@ pub const DARK: Palette = Palette {
     danger_hover: 0xb83229,
     on_danger: 0xffffff,
     warning: 0xf2b84b,
-    switch_on: 0xd8d8dc,
-    switch_knob_on: 0x0b0b0c,
+    highlight: 0xd8d8dc,
     toast_bg: 0x1c1c1f,
     toast_text: 0xededed,
     backdrop: 0x000000c0,
@@ -78,8 +76,7 @@ pub const LIGHT: Palette = Palette {
     danger_hover: 0xbb2e27,
     on_danger: 0xffffff,
     warning: 0x9a5b00,
-    switch_on: 0x2a2f36,
-    switch_knob_on: 0xffffff,
+    highlight: 0x2a2f36,
     toast_bg: 0xffffff,
     toast_text: 0x14171c,
     backdrop: 0x0f121870,

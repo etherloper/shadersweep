@@ -1181,7 +1181,7 @@ impl MainView {
                 .p(px(6.0))
                 .rounded_lg()
                 .border_2()
-                .border_color(rgb(if active { p.switch_on } else { p.border }))
+                .border_color(rgb(if active { p.highlight } else { p.border }))
                 .cursor_pointer()
                 .when(!active, |card| card.hover(|card| card.border_color(rgb(p.border_strong))))
                 .child(theme_preview(mode))
@@ -1331,21 +1331,20 @@ impl MainView {
             let when = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
             format::age(Some(when), SystemTime::now()).to_lowercase()
         });
-        let check_button = |label: &'static str| {
-            icon_button("check-updates", Some(Icon::Refresh), label, ButtonStyle::Secondary)
-                .on_click(cx.listener(|this, _, _, cx| this.check_for_updates(true, cx)))
-        };
 
         let status: AnyElement = match &self.update {
             UpdateState::Idle | UpdateState::UpToDate => {
                 let title = if matches!(self.update, UpdateState::UpToDate) { "You're up to date" } else { "Updates" };
                 let detail = checked.map_or_else(|| "Not checked yet.".to_owned(), |when| format!("Last checked {when}."));
-                status_row(Icon::Check, p.accent, title.into(), detail)
-                    .child(check_button("Check now"))
+                status_row(None, title.into(), detail)
+                    .child(
+                        square_button("check-updates", Icon::Refresh, 32.0, p.muted)
+                            .on_click(cx.listener(|this, _, _, cx| this.check_for_updates(true, cx))),
+                    )
                     .into_any_element()
             }
             UpdateState::Checking => {
-                status_row(Icon::Refresh, p.muted, "Checking for updates…".into(), "Asking GitHub for the latest release.".into())
+                status_row(Some((Icon::Refresh, p.muted)), "Checking for updates…".into(), "Asking GitHub for the latest release.".into())
                     .into_any_element()
             }
             UpdateState::Failed(err) => div()
@@ -1357,7 +1356,10 @@ impl MainView {
                     div()
                         .flex()
                         .gap_2()
-                        .child(check_button("Try again"))
+                        .child(
+                            icon_button("check-updates", Some(Icon::Refresh), "Try again", ButtonStyle::Secondary)
+                                .on_click(cx.listener(|this, _, _, cx| this.check_for_updates(true, cx))),
+                        )
                         .child(
                             button("open-releases", "Open releases page", ButtonStyle::Ghost)
                                 .on_click(|_, _, cx| cx.open_url(&updater::releases_page())),
@@ -1428,8 +1430,7 @@ impl MainView {
                     .into_any_element()
             }
             UpdateState::Ready { version, .. } => status_row(
-                Icon::Check,
-                p.accent,
+                Some((Icon::Check, p.accent)),
                 format!("Version {version} is installed"),
                 "Restart Shadersweep to start using it.".into(),
             )
@@ -1637,13 +1638,13 @@ fn empty_state(glyph: Icon, message: String) -> Div {
         .child(div().max_w(px(360.0)).text_center().child(message))
 }
 
-fn status_row(glyph: Icon, tint: u32, title: String, detail: String) -> Div {
+fn status_row(glyph: Option<(Icon, u32)>, title: String, detail: String) -> Div {
     let p = p();
     div()
         .flex()
         .items_center()
         .gap_3()
-        .child(
+        .children(glyph.map(|(glyph, tint)| {
             div()
                 .size(px(32.0))
                 .flex_none()
@@ -1652,8 +1653,8 @@ fn status_row(glyph: Icon, tint: u32, title: String, detail: String) -> Div {
                 .justify_center()
                 .rounded_full()
                 .bg(with_alpha(tint, 0.14))
-                .child(icon(glyph, 16.0, tint)),
-        )
+                .child(icon(glyph, 16.0, tint))
+        }))
         .child(
             div()
                 .flex()
@@ -1756,24 +1757,25 @@ fn about_card(updates: Div) -> Div {
                         .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("Shadersweep"))
+                        .child(
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap_2()
+                                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("Shadersweep"))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(p.muted))
+                                        .child(format!("v{}", updater::current_version())),
+                                ),
+                        )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(rgb(p.muted))
                                 .child("Manage shader caches for individual games."),
                         ),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .py_0p5()
-                        .rounded_full()
-                        .border_1()
-                        .border_color(rgb(p.border_strong))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(format!("v{}", updater::current_version())),
                 ),
         )
         .child(div().p_5().border_b_1().border_color(rgb(p.border)).child(updates))
@@ -1839,7 +1841,7 @@ fn theme_preview(mode: ThemeMode) -> Div {
                     .bg(rgb(palette.panel))
                     .border_b_1()
                     .border_color(rgb(palette.border))
-                    .child(div().size(px(6.0)).rounded_sm().bg(rgb(palette.switch_on)))
+                    .child(div().size(px(6.0)).rounded_sm().bg(rgb(palette.highlight)))
                     .child(line(0.5, palette.border_strong)),
             )
             .child(
@@ -1848,7 +1850,7 @@ fn theme_preview(mode: ThemeMode) -> Div {
                     .flex_col()
                     .gap(px(5.0))
                     .p(px(6.0))
-                    .child(line(0.85, palette.switch_on))
+                    .child(line(0.85, palette.highlight))
                     .child(line(0.6, palette.border_strong))
                     .child(line(0.4, palette.border_strong)),
             )
