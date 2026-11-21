@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, Div, FontWeight, MouseButton, MouseDownEvent, ScrollHandle,
+    Animation, AnimationExt, AnyElement, Context, Div, FontWeight, MouseButton, MouseDownEvent, ScrollHandle,
     SharedString,
     Stateful, div,
     ease_out_quint, img, point, prelude::*, px, relative, rgb, rgba, uniform_list,
@@ -309,11 +309,9 @@ impl MainView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded_full()
                 .cursor_pointer()
-                .bg(rgb(p.raised))
-                .hover(|button| button.bg(rgb(p.hover)))
-                .child(icon(Icon::Search, 15.0, p.muted))
+                .group("search-open")
+                .child(icon(Icon::Search, 15.0, p.muted).group_hover("search-open", |i| i.text_color(rgb(p.text))))
                 .on_click(focus_field)
                 .into_any_element();
         }
@@ -327,6 +325,7 @@ impl MainView {
                 Animation::new(Duration::from_millis(1000)).repeat(),
                 |caret, delta| caret.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
             );
+        // Borderless: only an underline, in the accent colour while focused.
         div()
             .id("search")
             .flex()
@@ -334,25 +333,11 @@ impl MainView {
             .items_center()
             .gap_2()
             .h(px(SEARCH_HEIGHT))
-            .pl_3()
-            .pr_1p5()
+            .px_1()
             .overflow_hidden()
-            .rounded_full()
-            .bg(rgb(if focused { p.panel } else { p.raised }))
-            .border_1()
+            .border_b_2()
+            .border_color(rgb(if focused { p.accent } else { p.border_strong }))
             .cursor_text()
-            .when(focused, |field| {
-                // A soft accent ring while the field has focus.
-                field.border_color(rgb(p.accent)).shadow(vec![BoxShadow {
-                    color: with_alpha(p.accent, 0.25),
-                    offset: point(px(0.0), px(0.0)),
-                    blur_radius: px(0.0),
-                    spread_radius: px(3.0),
-                }])
-            })
-            .when(!focused, |field| {
-                field.border_color(rgb(p.border)).hover(|field| field.border_color(rgb(p.border_strong)))
-            })
             .child(icon(Icon::Search, 15.0, if focused { p.text } else { p.muted }))
             .child(
                 div()
@@ -376,11 +361,9 @@ impl MainView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded_full()
                         .cursor_pointer()
-                        .bg(rgb(p.hover))
-                        .hover(|b| b.bg(rgb(p.border_strong)))
-                        .child(icon(Icon::X, 12.0, p.text))
+                        .group("clear-search")
+                        .child(icon(Icon::X, 12.0, p.muted).group_hover("clear-search", |i| i.text_color(rgb(p.text))))
                         .on_click(cx.listener(|this, _, _, cx| this.set_search(String::new(), cx))),
                 )
             })
